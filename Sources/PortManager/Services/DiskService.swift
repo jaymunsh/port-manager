@@ -66,8 +66,14 @@ final class DiskService: @unchecked Sendable {
         let volName = raw[kDADiskDescriptionVolumeNameKey as String] as? String
         let mount = (raw[kDADiskDescriptionVolumePathKey as String] as? URL)?.path
         let kind = raw[kDADiskDescriptionVolumeKindKey as String] as? String ?? ""
-        // Skip whole disks, APFS containers, and EFI — only real volumes.
-        guard volName != nil || mount != nil, kind != "efi" else { return nil }
+        let content = raw[kDADiskDescriptionMediaContentKey as String] as? String ?? ""
+        // Skip whole disks, APFS containers, and EFI partitions — only real
+        // user volumes. EFI partitions report kind "msdos" (FAT32), so match
+        // the volume name and GPT content type instead.
+        guard volName != nil || mount != nil,
+              kind != "efi",
+              volName != "EFI",
+              !content.hasPrefix("C12A7328") else { return nil }
         let size = (raw[kDADiskDescriptionMediaSizeKey as String] as? NSNumber)?.int64Value ?? 0
         let ejectable = (raw[kDADiskDescriptionMediaEjectableKey as String] as? NSNumber)?.boolValue ?? false
             || (raw[kDADiskDescriptionMediaRemovableKey as String] as? NSNumber)?.boolValue ?? false
