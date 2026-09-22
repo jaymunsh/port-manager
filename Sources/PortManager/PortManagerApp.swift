@@ -11,6 +11,7 @@ struct PortManagerApp: App {
             .environmentObject(state.presets)
             .environmentObject(state.activity)
             .environmentObject(state.monitor)
+            .environmentObject(state.network)
     }
 
     var body: some Scene {
@@ -23,8 +24,10 @@ struct PortManagerApp: App {
             CommandGroup(replacing: .newItem) {}
         }
 
-        MenuBarExtra("PortManager", systemImage: "network") {
+        MenuBarExtra {
             injectStores(into: MenuBarPopover())
+        } label: {
+            injectStores(into: MenuBarLabel())
         }
         .menuBarExtraStyle(.window)
 

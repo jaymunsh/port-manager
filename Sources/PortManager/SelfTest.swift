@@ -20,7 +20,8 @@ enum SelfTest {
 
             func entry(port: Int, command: String) -> PortEntry {
                 PortEntry(pid: 1, command: command, user: "u", fd: "1",
-                          proto: .tcp, address: "*", port: port)
+                          proto: .tcp, address: "*", port: port,
+                          state: "LISTEN", remote: nil)
             }
 
             // MARK: LsofParser
@@ -83,7 +84,28 @@ enum SelfTest {
             check(LsofParser.parse("").isEmpty, "empty output → no entries")
 
             let connected = LsofParser.splitEndpoint("127.0.0.1:5555->1.2.3.4:443")
-            check(connected?.port == 5555, "takes local side of connected socket")
+            check(connected?.port == 5555 && connected?.remote == "1.2.3.4:443",
+                  "splits local/remote of connected socket")
+
+            let connFixture = """
+            p836
+            cnode
+            Lsunghyuk
+            f12
+            PTCP
+            n*:3000
+            TST=LISTEN
+            f14
+            PTCP
+            n10.0.0.1:5555->93.184.216.34:443
+            TST=ESTABLISHED
+            """
+            let conns = LsofParser.parse(connFixture)
+            check(conns.count == 2 && conns[0].state == "LISTEN" && conns[0].isListener,
+                  "parses TST=LISTEN state")
+            check(conns[1].state == "ESTABLISHED" && !conns[1].isListener
+                  && conns[1].remote == "93.184.216.34:443",
+                  "parses ESTABLISHED outbound socket")
 
             // MARK: PresetStore.status
 
@@ -112,6 +134,16 @@ enum SelfTest {
             check(stats[497]?.cpu == 12.3 && stats[497]?.mem == 2.5,
                   "parses pid/cpu/mem")
             check(stats[1] != nil && stats[999] == nil, "skips malformed lines")
+
+            // MARK: NettopProvider.parse
+
+            section("NettopProvider.parse")
+
+            let netOut = "                                              bytes_in  bytes_out\nnode.836   1000   500\nbad.line x y\nmDNSResponder.208   9000   700\n"
+            let net = NettopProvider.parse(netOut)
+            check(net[836]?.bytesIn == 1000 && net[836]?.bytesOut == 500,
+                  "parses pid and byte counters")
+            check(net[208] != nil && net[999] == nil, "skips malformed nettop lines")
 
             // MARK: LsofProvider (live)
 

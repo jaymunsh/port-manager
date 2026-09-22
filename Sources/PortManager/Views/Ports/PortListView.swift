@@ -1,15 +1,19 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct PortListView: View {
     @EnvironmentObject var ports: PortStore
     @EnvironmentObject var presets: PresetStore
     @State private var search = ""
     @State private var selection: PortEntry.ID?
-    @State private var localOnly = false
+    @AppStorage("ports.localOnly") private var localOnly = false
     @State private var showInspector = true
     @State private var killTarget: PortEntry?
     @State private var presetTarget: PortEntry?
+    @AppStorage("ports.sortKey") private var sortKeyRaw = "port"
+    @AppStorage("ports.sortAsc") private var sortAsc = true
     @State private var sortOrder: [RowComparator] = [RowComparator(key: .port)]
+    @State private var exportError: String?
 
     private var filtered: [PortEntry] {
         ports.entries
@@ -60,20 +64,16 @@ struct PortListView: View {
             }
             .width(44)
 
-            TableColumn("CPU", sortUsing: RowComparator(key: .cpu, stats: ports.stats)) { entry in
-                statText(ports.stats[entry.pid]?.cpu)
-            }
-            .width(52)
-
-            TableColumn("Mem", sortUsing: RowComparator(key: .mem, stats: ports.stats)) { entry in
-                statText(ports.stats[entry.pid]?.mem)
-            }
-            .width(52)
+            statColumns
 
             TableColumn("User", sortUsing: RowComparator(key: .user)) { entry in
                 Text(entry.user)
             }
             .width(min: 60, ideal: 90)
+
+            if ports.showConnections {
+                remoteColumn
+            }
 
             TableColumn("Preset") { entry in
                 if let preset = presets.preset(for: entry) {
@@ -109,11 +109,26 @@ struct PortListView: View {
                 .toggleStyle(.button)
                 .help("Include UDP sockets")
 
+                Toggle(isOn: Binding(
+                    get: { ports.showConnections },
+                    set: { ports.showConnections = $0 })) {
+                    Image(systemName: "arrow.left.arrow.right")
+                }
+                .toggleStyle(.button)
+                .help("Show outbound connections (ESTABLISHED)")
+
                 Toggle(isOn: $showInspector) {
                     Image(systemName: "sidebar.trailing")
                 }
                 .toggleStyle(.button)
                 .help("Toggle details inspector")
+
+                Button {
+                    exportCSV()
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                }
+                .help("Export table as CSV")
             }
         }
         .safeAreaInset(edge: .bottom) {
@@ -143,13 +158,18 @@ struct PortListView: View {
                     }
                 }
                 Divider()
+                Button("Copy Port") { copy(String(entry.port)) }
+                Button("Copy PID") { copy(String(entry.pid)) }
+                if let remote = entry.remote {
+                    Button("Copy Remote Address") { copy(remote) }
+                }
                 Button("Copy lsof Command") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(
-                        "lsof -nP -i :\(entry.port)", forType: .string)
+                    copy("lsof -nP -i :\(entry.port)")
                 }
             }
         }
+        .onAppear { restoreSortOrder() }
+        .onChange(of: sortOrder) { _, new in saveSortOrder(new) }
         .sheet(item: $killTarget) { entry in
             KillSheet(entry: entry)
         }
@@ -160,6 +180,35 @@ struct PortListView: View {
         }
     }
 
+    @TableColumnBuilder<PortEntry, RowComparator>
+    private var statColumns: some TableColumnContent<PortEntry, RowComparator> {
+        TableColumn("CPU", sortUsing: RowComparator(key: .cpu, stats: ports.stats)) { entry in
+            statText(ports.stats[entry.pid]?.cpu)
+        }
+        .width(52)
+
+        TableColumn("Mem", sortUsing: RowComparator(key: .mem, stats: ports.stats)) { entry in
+            statText(ports.stats[entry.pid]?.mem)
+        }
+        .width(52)
+
+        TableColumn("Net", sortUsing: RowComparator(key: .net, net: ports.netRates)) { entry in
+            netText(ports.netRates[entry.pid])
+        }
+        .width(min: 70, ideal: 86)
+    }
+
+    @TableColumnBuilder<PortEntry, RowComparator>
+    private var remoteColumn: some TableColumnContent<PortEntry, RowComparator> {
+        TableColumn("Remote", sortUsing: RowComparator(key: .remote)) { entry in
+            Text(verbatim: entry.remote ?? "·")
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .width(min: 100, ideal: 150)
+    }
+
     private func statText(_ value: Double?) -> some View {
         Text(verbatim: value.map { String(format: "%.1f", $0) } ?? "–")
             .font(.caption.monospacedDigit())
@@ -167,9 +216,16 @@ struct PortListView: View {
             .frame(maxWidth: .infinity, alignment: .trailing)
     }
 
+    private func netText(_ rate: NetRate?) -> some View {
+        Text(verbatim: rate.map { "↓\(ByteFormat.rate($0.inRate)) ↑\(ByteFormat.rate($0.outRate))" } ?? "–")
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
     private var statusBar: some View {
         HStack {
-            Text(verbatim: "\(filtered.count) \(ports.includeUDP ? "sockets" : "listeners")")
+            Text(verbatim: "\(filtered.count) \(ports.includeUDP || ports.showConnections ? "sockets" : "listeners")")
             Spacer()
             if let updated = ports.lastUpdated {
                 Text("Updated \(updated, format: .dateTime.hour().minute().second())")
@@ -205,6 +261,52 @@ struct PortListView: View {
         guard let url = URL(string: "http://localhost:\(entry.port)") else { return }
         NSWorkspace.shared.open(url)
     }
+
+    private func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    // MARK: - Sort persistence
+
+    private func restoreSortOrder() {
+        guard let key = RowComparator.Key(rawValue: sortKeyRaw) else { return }
+        var c = RowComparator(key: key, stats: ports.stats, net: ports.netRates)
+        c.order = sortAsc ? .forward : .reverse
+        sortOrder = [c]
+    }
+
+    private func saveSortOrder(_ order: [RowComparator]) {
+        guard let first = order.first else { return }
+        sortKeyRaw = first.key.rawValue
+        sortAsc = first.order == .forward
+    }
+
+    // MARK: - CSV export
+
+    private func exportCSV() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "ports.csv"
+        panel.allowedContentTypes = [.commaSeparatedText]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        var lines = ["port,process,pid,bind,proto,state,remote,cpu,mem,user"]
+        for e in filtered {
+            let s = ports.stats[e.pid]
+            let fields = [
+                String(e.port), e.command, String(e.pid), e.address,
+                e.proto.rawValue, e.state, e.remote ?? "",
+                s.map { String(format: "%.1f", $0.cpu) } ?? "",
+                s.map { String(format: "%.1f", $0.mem) } ?? "",
+                e.user
+            ].map { $0.contains(",") || $0.contains("\"") ? "\"\($0.replacingOccurrences(of: "\"", with: "\"\""))\"" : $0 }
+            lines.append(fields.joined(separator: ","))
+        }
+        do {
+            try lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            exportError = error.localizedDescription
+        }
+    }
 }
 
 /// One comparator type for every sortable column — Table requires a single
@@ -212,10 +314,11 @@ struct PortListView: View {
 /// PortStore.stats) and key path fields share this struct.
 private struct RowComparator: SortComparator, Hashable {
     typealias Compared = PortEntry
-    enum Key { case port, command, pid, address, proto, user, cpu, mem }
+    enum Key: String { case port, command, pid, address, proto, user, cpu, mem, net, remote }
     var order: SortOrder = .forward
     var key: Key
     var stats: [pid_t: ProcStat] = [:]
+    var net: [pid_t: NetRate] = [:]
 
     func compare(_ lhs: PortEntry, _ rhs: PortEntry) -> ComparisonResult {
         let cmp: ComparisonResult = switch key {
@@ -227,6 +330,8 @@ private struct RowComparator: SortComparator, Hashable {
         case .user: Self.cmp(lhs.user, rhs.user)
         case .cpu: Self.cmp(stat(lhs, \.cpu), stat(rhs, \.cpu))
         case .mem: Self.cmp(stat(lhs, \.mem), stat(rhs, \.mem))
+        case .net: Self.cmp(net[lhs.pid]?.total ?? -.infinity, net[rhs.pid]?.total ?? -.infinity)
+        case .remote: Self.cmp(lhs.remote ?? "", rhs.remote ?? "")
         }
         guard order == .reverse else { return cmp }
         return switch cmp {

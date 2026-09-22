@@ -9,7 +9,8 @@ let package = Package(
         // (CLT ships no usable `swift test` runner).
         .executableTarget(
             name: "PortManager",
-            path: "Sources/PortManager"
+            path: "Sources/PortManager",
+            linkerSettings: [.linkedFramework("CoreWLAN")]
         )
     ]
 )

@@ -35,7 +35,7 @@ struct MenuBarPopover: View {
 
     private var summaryHeader: some View {
         HStack(spacing: 16) {
-            stat("\(ports.entries.count)", "listeners", "network")
+            stat("\(ports.entries.filter(\.isListener).count)", "listeners", "network")
             stat("\(conflictCount)", "conflicts", "exclamationmark.triangle")
             stat("\(devices.volumes.count)", "disks", "externaldrive")
         }

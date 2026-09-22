@@ -23,10 +23,11 @@ Xcode 없이 SwiftPM + 스크립트로 개발한다 (CLT만 설치된 환경).
 
 ## 구조
 
-- `Models/` — PortEntry, PortPreset, VolumeInfo, DeviceNode, ProcessInfo, ActivityEvent
-- `Services/` — LsofProvider(lsof -F 파싱), LsofParser, ProcessService(proc_pidpath/kill), USBProvider(system_profiler JSON), DiskService(DiskArbitration), NotifyService(UN), Shell
-- `Stores/` — PortStore(폴링+diff), DeviceStore, PresetStore(JSON 영속화), ActivityStore, MonitorEngine(diff→알림)
-- `Views/` — Ports/, Devices/, Presets/, MenuBar/, Activity/, Settings/
+- `Models/` — PortEntry, PortPreset, VolumeInfo, DeviceNode, ProcessInfo, ActivityEvent, NetInterface, NetRate
+- `Services/` — LsofProvider(lsof -F 파싱, `includeConnections`로 outbound 포함), LsofParser(TST=state, `->` remote), ProcessService(proc_pidpath/kill/ps stats), NettopProvider(프로세스별 누적 바이트→Store에서 rate 계산), NetworkProvider(netstat -ibn/ifconfig/scutil/CoreWLAN), USBProvider, DiskService(DiskArbitration), NotifyService(UN), Shell, ByteFormat
+- `Stores/` — PortStore(폴링+diff는 리스너만+netRates), DeviceStore, PresetStore(JSON 영속화), ActivityStore, MonitorEngine(diff→알림), NetworkStore(2s 폴링+rate delta)
+- `Views/` — Ports/, Network/, Devices/, Presets/, MenuBar/(팝오버+라이브 ↓레이트 라벨), Activity/, Settings/
+- 설정 영속화 — UserDefaults(`ports.*`, `notify.*`) + `@AppStorage`(뷰 상태). Table 정렬은 컬럼 전부 하나의 `RowComparator` 타입을 써야 함(SwiftUI Table 제약).
 - `main.swift` — `--selftest` 분기 후 `PortManagerApp.main()`
 
 ## 권한/제약

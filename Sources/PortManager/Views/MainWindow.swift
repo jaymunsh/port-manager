@@ -5,13 +5,14 @@ struct MainWindow: View {
     @State private var section: SidebarSection = .ports
 
     enum SidebarSection: String, CaseIterable, Identifiable {
-        case ports, devices, presets, activity
+        case ports, network, devices, presets, activity
 
         var id: String { rawValue }
 
         var title: String {
             switch self {
             case .ports: "Ports"
+            case .network: "Network"
             case .devices: "Devices"
             case .presets: "Presets"
             case .activity: "Activity"
@@ -21,6 +22,7 @@ struct MainWindow: View {
         var icon: String {
             switch self {
             case .ports: "network"
+            case .network: "wifi"
             case .devices: "externaldrive.connected.to.line.below"
             case .presets: "bookmark"
             case .activity: "list.bullet.rectangle"
@@ -38,6 +40,7 @@ struct MainWindow: View {
         } detail: {
             switch section {
             case .ports: PortListView()
+            case .network: NetworkView()
             case .devices: DeviceListView()
             case .presets: PresetListView()
             case .activity: ActivityLogView()

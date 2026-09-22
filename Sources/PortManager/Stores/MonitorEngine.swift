@@ -3,9 +3,23 @@ import Foundation
 /// Turns raw store diffs into activity log entries and user notifications.
 @MainActor
 final class MonitorEngine: ObservableObject {
-    @Published var notifyNewListeners = true
-    @Published var notifyPresetConflicts = true
-    @Published var notifyDiskEvents = true
+    @Published var notifyNewListeners = MonitorEngine.defaultsBool("notify.newListeners") {
+        didSet { Self.persist(key: "notify.newListeners", value: notifyNewListeners) }
+    }
+    @Published var notifyPresetConflicts = MonitorEngine.defaultsBool("notify.presetConflicts") {
+        didSet { Self.persist(key: "notify.presetConflicts", value: notifyPresetConflicts) }
+    }
+    @Published var notifyDiskEvents = MonitorEngine.defaultsBool("notify.diskEvents") {
+        didSet { Self.persist(key: "notify.diskEvents", value: notifyDiskEvents) }
+    }
+
+    private static func defaultsBool(_ key: String) -> Bool {
+        UserDefaults.standard.object(forKey: key) as? Bool ?? true
+    }
+
+    private static func persist(key: String, value: Bool) {
+        UserDefaults.standard.set(value, forKey: key)
+    }
 
     private let notifier = NotifyService()
     private var started = false

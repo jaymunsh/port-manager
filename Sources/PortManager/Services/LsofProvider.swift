@@ -1,10 +1,12 @@
 import Foundation
 
 struct LsofProvider: Sendable {
-    /// Snapshot of TCP listeners (and optionally all UDP sockets).
-    /// `-iTCP -sTCP:LISTEN -iUDP` evaluates as (TCP AND LISTEN) OR (UDP).
-    func snapshot(includeUDP: Bool = false) throws -> [PortEntry] {
-        var args = ["-nP", "-FpcnPLf", "-iTCP", "-sTCP:LISTEN"]
+    /// Snapshot of TCP listeners (and optionally all UDP sockets / outbound
+    /// connections). `-iTCP -sTCP:LISTEN -iUDP` evaluates as
+    /// (TCP AND LISTEN) OR (UDP).
+    func snapshot(includeUDP: Bool = false, includeConnections: Bool = false) throws -> [PortEntry] {
+        var args = ["-nP", "-FpcnPLfT", "-iTCP"]
+        if !includeConnections { args.append("-sTCP:LISTEN") }
         if includeUDP { args.append("-iUDP") }
         let result = try Shell.run("/usr/sbin/lsof", args)
         // lsof exits 1 when nothing matches — still parse whatever stdout has.

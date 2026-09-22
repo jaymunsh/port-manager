@@ -34,7 +34,12 @@ struct PortDetailView: View {
             }
             Text(entry.endpoint)
                 .font(.system(.title3, design: .monospaced))
-            Text(verbatim: "\(entry.proto.rawValue) · pid \(entry.pid) · \(entry.user)")
+            if let remote = entry.remote {
+                Text(verbatim: "→ \(remote)")
+                    .font(.system(.callout, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            Text(verbatim: "\(entry.proto.rawValue)\(entry.state.isEmpty ? "" : " · \(entry.state)") · pid \(entry.pid) · \(entry.user)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
