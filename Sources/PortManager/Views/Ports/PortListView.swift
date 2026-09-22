@@ -55,6 +55,16 @@ struct PortListView: View {
             }
             .width(44)
 
+            TableColumn("CPU") { entry in
+                statText(ports.stats[entry.pid]?.cpu)
+            }
+            .width(52)
+
+            TableColumn("Mem") { entry in
+                statText(ports.stats[entry.pid]?.mem)
+            }
+            .width(52)
+
             TableColumn("User", value: \.user)
                 .width(min: 60, ideal: 90)
 
@@ -141,6 +151,13 @@ struct PortListView: View {
                 presets.add(preset)
             }
         }
+    }
+
+    private func statText(_ value: Double?) -> some View {
+        Text(verbatim: value.map { String(format: "%.1f", $0) } ?? "–")
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .trailing)
     }
 
     private var statusBar: some View {

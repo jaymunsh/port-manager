@@ -103,6 +103,16 @@ enum SelfTest {
             check(store.status(for: strict, entries: [entry(port: 8081, command: "python3")]) == .free,
                   "other ports ignored")
 
+            // MARK: ProcessService.parseStats
+
+            section("ProcessService.parseStats")
+
+            let psOut = "    1   0.0   0.1\n  497  12.3   2.5\nnotapid x y\n"
+            let stats = ProcessService.parseStats(psOut)
+            check(stats[497]?.cpu == 12.3 && stats[497]?.mem == 2.5,
+                  "parses pid/cpu/mem")
+            check(stats[1] != nil && stats[999] == nil, "skips malformed lines")
+
             // MARK: LsofProvider (live)
 
             section("LsofProvider (live)")

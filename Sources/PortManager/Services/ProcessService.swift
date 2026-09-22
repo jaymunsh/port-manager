@@ -1,6 +1,12 @@
 import Darwin
 import Foundation
 
+/// CPU/memory usage for one process, from a single `ps` snapshot.
+struct ProcStat: Sendable {
+    var cpu: Double
+    var mem: Double
+}
+
 struct ProcessService: Sendable {
     /// PIDs that must never be signalled from this app.
     private static let protectedPIDs: Set<pid_t> = [0, 1]
@@ -70,6 +76,22 @@ struct ProcessService: Sendable {
             startTime: start,
             openFileCount: LsofProvider().openFileCount(for: pid)
         )
+    }
+
+    /// CPU/mem for every process in one `ps` call — cheap enough to run per refresh.
+    func allStats() -> [pid_t: ProcStat] {
+        guard let res = try? Shell.run("/bin/ps", ["-axo", "pid=,%cpu=,%mem="]) else { return [:] }
+        return Self.parseStats(res.stdout)
+    }
+
+    static func parseStats(_ output: String) -> [pid_t: ProcStat] {
+        var map: [pid_t: ProcStat] = [:]
+        for line in output.split(separator: "\n") {
+            let cols = line.split(separator: " ", omittingEmptySubsequences: true)
+            guard cols.count >= 3, let pid = pid_t(cols[0]) else { continue }
+            map[pid] = ProcStat(cpu: Double(cols[1]) ?? 0, mem: Double(cols[2]) ?? 0)
+        }
+        return map
     }
 
     /// Sends a signal; returns nil on success.

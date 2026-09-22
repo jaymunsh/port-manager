@@ -3,6 +3,7 @@ import Foundation
 @MainActor
 final class PortStore: ObservableObject {
     @Published private(set) var entries: [PortEntry] = []
+    @Published private(set) var stats: [pid_t: ProcStat] = [:]
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var lastError: String?
     @Published var includeUDP = false {
@@ -38,14 +39,16 @@ final class PortStore: ObservableObject {
 
     func refresh() async {
         let udp = includeUDP
-        let snapshot = await Task.detached(priority: .utility) {
-            try? LsofProvider().snapshot(includeUDP: udp)
+        let result = await Task.detached(priority: .utility) {
+            (try? LsofProvider().snapshot(includeUDP: udp), ProcessService().allStats())
         }.value
+        let (snapshot, newStats) = result
         guard let snapshot else {
             lastError = "lsof 실행에 실패했습니다"
             return
         }
         lastError = nil
+        stats = newStats
         let isBaseline = lastUpdated == nil
         let old = Set(entries)
         let new = Set(snapshot)
