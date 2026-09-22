@@ -35,25 +35,32 @@ struct PortListView: View {
         return ports.entries.first { $0.id == selection }
     }
 
-    private var filteredGroups: [ProcessGroup] {
-        let ids = Set(filtered.map(\.pid))
-        return ports.groups.filter { ids.contains($0.pid) }
-            .map { group in
-                var g = group
-                g.sockets = group.sockets.filter { entry in
-                    (!localOnly || entry.isLocalOnly) &&
-                    (search.isEmpty
-                        || entry.command.localizedCaseInsensitiveContains(search)
-                        || String(entry.port).contains(search)
-                        || entry.address.contains(search))
-                }
-                return g
-            }
-            .filter { !$0.sockets.isEmpty }
+    /// Groups the *already-filtered* rows — a second grouping pass over
+    /// `ports.groups` would discard the current filters.
+    private func filteredGroups(from rows: [PortEntry]) -> [ProcessGroup] {
+        PortStore.groups(from: rows)
+    }
+
+    /// preset lookup + status resolved once per render pass instead of
+    /// scanning all entries per row.
+    private struct PresetContext {
+        var byKey: [String: PortPreset]
+        var status: [UUID: PresetStatus]
+    }
+
+    private var presetContext: PresetContext {
+        PresetContext(
+            byKey: Dictionary(presets.presets.map { ("\($0.port):\($0.proto)", $0) },
+                              uniquingKeysWith: { first, _ in first }),
+            status: Dictionary(presets.presets.map {
+                ($0.id, presets.status(for: $0, entries: ports.entries))
+            }, uniquingKeysWith: { first, _ in first }))
     }
 
     var body: some View {
-        content
+        let rows = filtered
+        let presetCtx = presetContext
+        content(rows: rows, presetCtx: presetCtx)
         .searchable(text: $search, prompt: "Port, process, or address")
         .toolbar {
             ToolbarItemGroup {
@@ -108,7 +115,7 @@ struct PortListView: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            statusBar
+            statusBar(rows: rows)
         }
         .inspector(isPresented: $showInspector) {
             if let entry = selectedEntry {
@@ -127,6 +134,10 @@ struct PortListView: View {
             showInspector = new != nil
         }
         .onChange(of: sortOrder) { _, new in saveSortOrder(new) }
+        // The comparator carries a snapshot of stats/rates — refresh it so
+        // CPU/Net sorting reflects current values, not launch-time ones.
+        .onChange(of: ports.stats) { _, _ in refreshComparatorData() }
+        .onChange(of: ports.netRates) { _, _ in refreshComparatorData() }
         .sheet(item: $killTarget) { entry in
             KillSheet(entry: entry)
         }
@@ -143,25 +154,26 @@ struct PortListView: View {
     }
 
     @ViewBuilder
-    private var content: some View {
+    private func content(rows: [PortEntry], presetCtx: PresetContext) -> some View {
         if groupByProcess {
             ProcessGroupView(
-                groups: filteredGroups,
+                groups: filteredGroups(from: rows),
                 onSelectEntry: { entry in
                     selection = entry.id
                     showInspector = true
                 },
                 onKill: { killTarget = $0 })
         } else {
-            socketTable
+            socketTable(rows: rows, presetCtx: presetCtx)
         }
     }
 
-    private var socketTable: some View {
-        Table(filtered, selection: $selection, sortOrder: $sortOrder) {
+    private func socketTable(rows: [PortEntry], presetCtx: PresetContext) -> some View {
+        Table(rows, selection: $selection, sortOrder: $sortOrder) {
             TableColumn("Port", sortUsing: RowComparator(key: .port)) { entry in
                 Text(entry.port, format: .number.grouping(.never))
                     .font(.body.monospacedDigit())
+                    .foregroundStyle(isConflicted(entry, presetCtx) ? .red : .primary)
             }
             .width(min: 50, ideal: 64)
 
@@ -209,9 +221,9 @@ struct PortListView: View {
             }
 
             TableColumn("Preset") { entry in
-                if let preset = presets.preset(for: entry) {
+                if let preset = presetCtx.byKey["\(entry.port):\(entry.proto.rawValue)"] {
                     Label(preset.name, systemImage: "bookmark.fill")
-                        .foregroundStyle(presetColor(preset))
+                        .foregroundStyle(color(for: presetCtx.status[preset.id]))
                         .lineLimit(1)
                 }
             }
@@ -219,7 +231,7 @@ struct PortListView: View {
         }
         .contextMenu(forSelectionType: PortEntry.ID.self) { ids in
             if let id = ids.first,
-               let entry = filtered.first(where: { $0.id == id }) {
+               let entry = rows.first(where: { $0.id == id }) {
                 Button("Terminate Process…") { killTarget = entry }
                 Button("Save as Preset…") { presetTarget = entry }
                 Button("Bandwidth Alert…") { alertTarget = entry }
@@ -280,20 +292,21 @@ struct PortListView: View {
     }
 
     /// Listeners show the owning process's total throughput; connection rows
-    /// show that socket's own rate.
+    /// show that socket's own rate. Active traffic is brighter than idle.
     private func netText(_ entry: PortEntry) -> some View {
         let rate = entry.isListener
             ? ports.netRates[entry.pid]
             : ports.connRates[entry.connKey]
+        let active = (rate?.total ?? 0) > 0
         return Text(verbatim: rate.map { "↓\(ByteFormat.rate($0.inRate)) ↑\(ByteFormat.rate($0.outRate))" } ?? "–")
             .font(.caption.monospacedDigit())
-            .foregroundStyle(.secondary)
+            .foregroundStyle(active ? .primary : .tertiary)
             .frame(maxWidth: .infinity, alignment: .trailing)
     }
 
-    private var statusBar: some View {
+    private func statusBar(rows: [PortEntry]) -> some View {
         HStack {
-            Text(verbatim: "\(filtered.count) \(ports.includeUDP || ports.showConnections ? "sockets" : "listeners")")
+            Text(verbatim: "\(rows.count) \(ports.includeUDP || ports.showConnections ? "sockets" : "listeners")")
             Spacer()
             if let updated = ports.lastUpdated {
                 Text("Updated \(updated, format: .dateTime.hour().minute().second())")
@@ -331,11 +344,18 @@ struct PortListView: View {
         return ports.container(forPort: entry.port)
     }
 
-    private func presetColor(_ preset: PortPreset) -> Color {
-        switch presets.status(for: preset, entries: ports.entries) {
+    /// Preset conflicted on this entry's port — tints the Port cell red.
+    private func isConflicted(_ entry: PortEntry, _ ctx: PresetContext) -> Bool {
+        guard let preset = ctx.byKey["\(entry.port):\(entry.proto.rawValue)"] else { return false }
+        return ctx.status[preset.id] == .conflict
+    }
+
+    private func color(for status: PresetStatus?) -> Color {
+        switch status {
         case .expected: .blue
         case .conflict: .red
         case .free: .green
+        case nil: .secondary
         }
     }
 
@@ -353,8 +373,16 @@ struct PortListView: View {
 
     private func restoreSortOrder() {
         guard let key = RowComparator.Key(rawValue: sortKeyRaw) else { return }
-        var c = RowComparator(key: key, stats: ports.stats, net: ports.netRates)
+        var c = RowComparator(key: key, stats: ports.stats, net: ports.netRates, conn: ports.connRates)
         c.order = sortAsc ? .forward : .reverse
+        sortOrder = [c]
+    }
+
+    private func refreshComparatorData() {
+        guard var c = sortOrder.first else { return }
+        c.stats = ports.stats
+        c.net = ports.netRates
+        c.conn = ports.connRates
         sortOrder = [c]
     }
 

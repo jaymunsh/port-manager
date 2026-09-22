@@ -7,13 +7,16 @@ struct DockerProvider: Sendable {
         var containers: [DockerContainer]
         /// host port → container
         var byPort: [Int: DockerContainer]
+        /// false when the docker CLI/daemon is unavailable — callers should
+        /// back off instead of re-running a failing spawn every poll.
+        var available: Bool
     }
 
     func snapshot() -> Snapshot {
         guard let res = try? Shell.run("/usr/bin/env", [
             "docker", "ps", "--format", "{{.ID}}|{{.Image}}|{{.Names}}|{{.Ports}}"
         ]), res.status == 0 else {
-            return Snapshot(containers: [], byPort: [:])
+            return Snapshot(containers: [], byPort: [:], available: false)
         }
         return Self.parse(res.stdout)
     }
@@ -33,7 +36,7 @@ struct DockerProvider: Sendable {
             containers.append(container)
             for port in hostPorts { byPort[port] = container }
         }
-        return Snapshot(containers: containers, byPort: byPort)
+        return Snapshot(containers: containers, byPort: byPort, available: true)
     }
 
     /// Extracts host ports from a Ports column like

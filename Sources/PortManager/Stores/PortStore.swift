@@ -75,7 +75,8 @@ final class PortStore: ObservableObject {
                 for handler in self.rateHandlers { handler() }
             }
         }
-        // Docker is optional and its CLI is slow-ish — poll on its own cadence.
+        // Docker is optional — when the CLI/daemon is absent, back off to a
+        // slow retry instead of spawning a failing process every 15s.
         dockerTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
@@ -85,7 +86,7 @@ final class PortStore: ObservableObject {
                 guard !Task.isCancelled else { return }
                 self.dockerContainers = snap.containers
                 self.dockerByPort = snap.byPort
-                try? await Task.sleep(for: .seconds(15))
+                try? await Task.sleep(for: .seconds(snap.available ? 15 : 60))
             }
         }
     }
@@ -100,7 +101,7 @@ final class PortStore: ObservableObject {
     }
 
     /// Entries rolled up per process for the grouped view.
-    var groups: [ProcessGroup] {
+    static func groups(from entries: [PortEntry]) -> [ProcessGroup] {
         Dictionary(grouping: entries, by: \.pid)
             .map { pid, sockets in
                 ProcessGroup(
