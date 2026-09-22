@@ -192,8 +192,8 @@ struct PortListView: View {
         }
         .width(52)
 
-        TableColumn("Net", sortUsing: RowComparator(key: .net, net: ports.netRates)) { entry in
-            netText(ports.netRates[entry.pid])
+        TableColumn("Net", sortUsing: RowComparator(key: .net, net: ports.netRates, conn: ports.connRates)) { entry in
+            netText(entry)
         }
         .width(min: 70, ideal: 86)
     }
@@ -216,8 +216,13 @@ struct PortListView: View {
             .frame(maxWidth: .infinity, alignment: .trailing)
     }
 
-    private func netText(_ rate: NetRate?) -> some View {
-        Text(verbatim: rate.map { "↓\(ByteFormat.rate($0.inRate)) ↑\(ByteFormat.rate($0.outRate))" } ?? "–")
+    /// Listeners show the owning process's total throughput; connection rows
+    /// show that socket's own rate.
+    private func netText(_ entry: PortEntry) -> some View {
+        let rate = entry.isListener
+            ? ports.netRates[entry.pid]
+            : ports.connRates[entry.connKey]
+        return Text(verbatim: rate.map { "↓\(ByteFormat.rate($0.inRate)) ↑\(ByteFormat.rate($0.outRate))" } ?? "–")
             .font(.caption.monospacedDigit())
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .trailing)
@@ -319,6 +324,7 @@ private struct RowComparator: SortComparator, Hashable {
     var key: Key
     var stats: [pid_t: ProcStat] = [:]
     var net: [pid_t: NetRate] = [:]
+    var conn: [NettopProvider.ConnKey: NetRate] = [:]
 
     func compare(_ lhs: PortEntry, _ rhs: PortEntry) -> ComparisonResult {
         let cmp: ComparisonResult = switch key {
@@ -330,7 +336,7 @@ private struct RowComparator: SortComparator, Hashable {
         case .user: Self.cmp(lhs.user, rhs.user)
         case .cpu: Self.cmp(stat(lhs, \.cpu), stat(rhs, \.cpu))
         case .mem: Self.cmp(stat(lhs, \.mem), stat(rhs, \.mem))
-        case .net: Self.cmp(net[lhs.pid]?.total ?? -.infinity, net[rhs.pid]?.total ?? -.infinity)
+        case .net: Self.cmp(rate(lhs), rate(rhs))
         case .remote: Self.cmp(lhs.remote ?? "", rhs.remote ?? "")
         }
         guard order == .reverse else { return cmp }
@@ -339,6 +345,10 @@ private struct RowComparator: SortComparator, Hashable {
         case .orderedDescending: .orderedAscending
         default: .orderedSame
         }
+    }
+
+    private func rate(_ e: PortEntry) -> Double {
+        (e.isListener ? net[e.pid] : conn[e.connKey])?.total ?? -.infinity
     }
 
     private func stat(_ entry: PortEntry, _ field: KeyPath<ProcStat, Double>) -> Double {

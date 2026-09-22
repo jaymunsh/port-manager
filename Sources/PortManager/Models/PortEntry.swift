@@ -23,4 +23,15 @@ struct PortEntry: Identifiable, Hashable, Sendable {
     var isLocalOnly: Bool { address == "127.0.0.1" || address == "[::1]" || address == "localhost" }
     /// Listening TCP socket, or a bound (unconnected) UDP socket.
     var isListener: Bool { remote == nil && (proto == .udp || state == "LISTEN") }
+
+    /// Port number on the remote end of `remote`, if present.
+    var remotePort: Int {
+        guard let remote, let colon = remote.lastIndex(of: ":") else { return 0 }
+        return Int(remote[remote.index(after: colon)...]) ?? 0
+    }
+
+    /// Key matching this socket against nettop per-connection counters.
+    var connKey: NettopProvider.ConnKey {
+        NettopProvider.ConnKey(pid: pid, localPort: port, remotePort: remotePort)
+    }
 }

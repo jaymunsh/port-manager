@@ -139,11 +139,16 @@ enum SelfTest {
 
             section("NettopProvider.parse")
 
-            let netOut = "                                              bytes_in  bytes_out\nnode.836   1000   500\nbad.line x y\nmDNSResponder.208   9000   700\n"
+            let netOut = "                                              bytes_in  bytes_out\nnode.836   1000   500\n   tcp4 *:3000<->*:*   10   20\n   tcp4 127.0.0.1:5555<->1.2.3.4:443   700   300\nbad.line x y\nmDNSResponder.208   9000   700\n"
             let net = NettopProvider.parse(netOut)
-            check(net[836]?.bytesIn == 1000 && net[836]?.bytesOut == 500,
+            check(net.perPid[836]?.bytesIn == 1000 && net.perPid[836]?.bytesOut == 500,
                   "parses pid and byte counters")
-            check(net[208] != nil && net[999] == nil, "skips malformed nettop lines")
+            check(net.perPid[208] != nil && net.perPid[999] == nil,
+                  "skips malformed nettop lines")
+            let k = NettopProvider.ConnKey(pid: 836, localPort: 5555, remotePort: 443)
+            check(net.perConn[k]?.bytesIn == 700, "parses per-connection counters")
+            let listenerKey = NettopProvider.ConnKey(pid: 836, localPort: 3000, remotePort: 0)
+            check(net.perConn[listenerKey] != nil, "wildcard remote → port 0 key")
 
             // MARK: LsofProvider (live)
 

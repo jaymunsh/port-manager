@@ -4,7 +4,10 @@ import Foundation
 final class PortStore: ObservableObject {
     @Published private(set) var entries: [PortEntry] = []
     @Published private(set) var stats: [pid_t: ProcStat] = [:]
+    /// Per-process totals (nettop header rows).
     @Published private(set) var netRates: [pid_t: NetRate] = [:]
+    /// Per-socket rates keyed by pid+local port+remote port.
+    @Published private(set) var connRates: [NettopProvider.ConnKey: NetRate] = [:]
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var lastError: String?
     @Published var includeUDP = UserDefaults.standard.bool(forKey: "ports.includeUDP") {
@@ -30,6 +33,7 @@ final class PortStore: ObservableObject {
     private var pollTask: Task<Void, Never>?
     private var diffHandlers: [([PortEntry], [PortEntry]) -> Void] = []
     private var prevNet: [pid_t: (in: Int64, out: Int64, at: Date)] = [:]
+    private var prevConn: [NettopProvider.ConnKey: (in: Int64, out: Int64, at: Date)] = [:]
 
     func onDiff(_ handler: @escaping ([PortEntry], [PortEntry]) -> Void) {
         diffHandlers.append(handler)
@@ -68,7 +72,8 @@ final class PortStore: ObservableObject {
         }
         lastError = nil
         stats = newStats
-        netRates = Self.rates(from: net, previous: &prevNet)
+        netRates = Self.rates(from: net.perPid, previous: &prevNet)
+        connRates = Self.rates(from: net.perConn, previous: &prevConn)
         let isBaseline = lastUpdated == nil
         // Only listeners drive diff notifications — outbound connections
         // churn too fast to be meaningful events.
@@ -86,20 +91,20 @@ final class PortStore: ObservableObject {
     }
 
     /// Converts cumulative nettop counters into per-second rates.
-    private static func rates(
-        from snapshot: [pid_t: NettopProvider.Snapshot],
-        previous: inout [pid_t: (in: Int64, out: Int64, at: Date)]
-    ) -> [pid_t: NetRate] {
+    private static func rates<K: Hashable>(
+        from snapshot: [K: NettopProvider.Snapshot],
+        previous: inout [K: (in: Int64, out: Int64, at: Date)]
+    ) -> [K: NetRate] {
         let now = Date()
-        var out: [pid_t: NetRate] = [:]
-        for (pid, s) in snapshot {
-            if let p = previous[pid] {
+        var out: [K: NetRate] = [:]
+        for (key, s) in snapshot {
+            if let p = previous[key] {
                 let dt = max(now.timeIntervalSince(p.at), 0.1)
-                out[pid] = NetRate(
+                out[key] = NetRate(
                     inRate: max(0, Double(s.bytesIn - p.in) / dt),
                     outRate: max(0, Double(s.bytesOut - p.out) / dt))
             }
-            previous[pid] = (s.bytesIn, s.bytesOut, now)
+            previous[key] = (s.bytesIn, s.bytesOut, now)
         }
         return out
     }

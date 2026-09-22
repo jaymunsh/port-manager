@@ -1,14 +1,14 @@
 import SwiftUI
 
-/// Status-bar label: globe icon plus live total throughput.
+/// Status-bar label: globe icon plus live listener count.
 struct MenuBarLabel: View {
     @EnvironmentObject var state: AppState
-    @EnvironmentObject var network: NetworkStore
+    @EnvironmentObject var ports: PortStore
 
     var body: some View {
         HStack(spacing: 4) {
             Image(systemName: "network")
-            Text(verbatim: "↓\(ByteFormat.rate(network.totalInRate))")
+            Text(verbatim: "\(ports.entries.filter(\.isListener).count)")
                 .font(.caption.monospacedDigit())
         }
         .onAppear { state.start() }
