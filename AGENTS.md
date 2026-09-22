@@ -20,13 +20,15 @@ Xcode 없이 SwiftPM + 스크립트로 개발한다 (CLT만 설치된 환경).
 - **Store 주입 규칙** — `AppState`의 프로퍼티(`ports`, `devices`, `presets`, `activity`, `monitor`)는 각각 별도 `@EnvironmentObject`로 주입된다. `AppState` 자체는 `let` 프로퍼티라 중첩 `ObservableObject` 변경이 전파되지 않으므로, 뷰는 필요한 Store 타입으로 선언해야 UI가 갱신된다 (`@EnvironmentObject var ports: PortStore`).
 - **LocalizedStringKey 함정** — `Text("pid \(pid)")` 같이 보간된 숫자는 로케일 그룹핑(`91,595`)이 붙는다. 포트/PID 표시는 `Text(verbatim:)` 또는 `String`을 먼저 만들어 사용.
 - Swift 6 strict concurrency — Store는 `@MainActor`, Service는 `Sendable` struct/함수.
+- **`MenuBarExtra(isInserted:)` 함정** — `@AppStorage`/`@Published` 같은 라이브 바인딩을 넘기면 MenuBarExtraController KVO 피드백 루프로 CPU 100% + 전체 Scene 정지(창은 뜨지만 폴링/갱신 모두 멈춤). `.constant` 바인딩만 사용하고, 토글은 재시작 시 반영된다.
+- `nettop -x -l 1`은 플래그와 무관하게 호출당 ~5초 걸린다 — 폴링 경로에 직접 넣으면 UI가 느려진다.
 
 ## 구조
 
 - `Models/` — PortEntry, PortPreset, VolumeInfo, DeviceNode, ProcessInfo, ActivityEvent, NetInterface, NetRate
-- `Services/` — LsofProvider(lsof -F 파싱, `includeConnections`로 outbound 포함), LsofParser(TST=state, `->` remote), ProcessService(proc_pidpath/kill/ps stats), NettopProvider(프로세스별 누적 바이트→Store에서 rate 계산), NetworkProvider(netstat -ibn/ifconfig/scutil/CoreWLAN), USBProvider, DiskService(DiskArbitration), NotifyService(UN), Shell, ByteFormat
-- `Stores/` — PortStore(폴링+diff는 리스너만+netRates), DeviceStore, PresetStore(JSON 영속화), ActivityStore, MonitorEngine(diff→알림), NetworkStore(2s 폴링+rate delta)
-- `Views/` — Ports/, Network/, Devices/, Presets/, MenuBar/(팝오버+라이브 ↓레이트 라벨), Activity/, Settings/
+- `Services/` — LsofProvider(lsof -F 파싱, `includeConnections`로 outbound 포함), LsofParser(TST=state, `->` remote), ProcessService(proc_pidpath/kill/ps stats), NettopProvider(프로세스 헤더+연결별 누적 바이트 파싱 → Store에서 rate 계산), NetworkProvider(netstat -ibn/ifconfig/scutil/CoreWLAN), USBProvider, DiskService(DiskArbitration), NotifyService(UN), Shell, ByteFormat
+- `Stores/` — PortStore(lsof 폴링+diff는 리스너만; nettop은 별도 루프 — 1샘플에 ~5초라 포트 갱신 경로와 분리됨), DeviceStore, PresetStore(JSON 영속화), ActivityStore, MonitorEngine(diff→알림), NetworkStore(2s 폴링+rate delta)
+- `Views/` — Ports/, Network/, Devices/, Presets/, MenuBar/(팝오버+리스너 수 라벨), Activity/, Settings/
 - 설정 영속화 — UserDefaults(`ports.*`, `notify.*`) + `@AppStorage`(뷰 상태). Table 정렬은 컬럼 전부 하나의 `RowComparator` 타입을 써야 함(SwiftUI Table 제약).
 - `main.swift` — `--selftest` 분기 후 `PortManagerApp.main()`
 

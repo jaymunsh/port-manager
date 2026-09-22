@@ -31,6 +31,7 @@ final class PortStore: ObservableObject {
     }
 
     private var pollTask: Task<Void, Never>?
+    private var netTask: Task<Void, Never>?
     private var diffHandlers: [([PortEntry], [PortEntry]) -> Void] = []
     private var prevNet: [pid_t: (in: Int64, out: Int64, at: Date)] = [:]
     private var prevConn: [NettopProvider.ConnKey: (in: Int64, out: Int64, at: Date)] = [:]
@@ -50,11 +51,26 @@ final class PortStore: ObservableObject {
                 try? await Task.sleep(for: .seconds(interval))
             }
         }
+        // nettop takes ~5s per snapshot — keep it off the port-refresh
+        // path so the table stays responsive.
+        netTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let net = await Task.detached(priority: .utility) {
+                    NettopProvider().snapshot()
+                }.value
+                guard !Task.isCancelled else { return }
+                self.netRates = Self.rates(from: net.perPid, previous: &self.prevNet)
+                self.connRates = Self.rates(from: net.perConn, previous: &self.prevConn)
+            }
+        }
     }
 
     func stopPolling() {
         pollTask?.cancel()
         pollTask = nil
+        netTask?.cancel()
+        netTask = nil
     }
 
     func refresh() async {
@@ -62,18 +78,15 @@ final class PortStore: ObservableObject {
         let conn = showConnections
         let result = await Task.detached(priority: .utility) {
             (try? LsofProvider().snapshot(includeUDP: udp, includeConnections: conn),
-             ProcessService().allStats(),
-             NettopProvider().snapshot())
+             ProcessService().allStats())
         }.value
-        let (snapshot, newStats, net) = result
+        let (snapshot, newStats) = result
         guard let snapshot else {
             lastError = "lsof 실행에 실패했습니다"
             return
         }
         lastError = nil
         stats = newStats
-        netRates = Self.rates(from: net.perPid, previous: &prevNet)
-        connRates = Self.rates(from: net.perConn, previous: &prevConn)
         let isBaseline = lastUpdated == nil
         // Only listeners drive diff notifications — outbound connections
         // churn too fast to be meaningful events.

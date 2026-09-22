@@ -2,7 +2,10 @@ import SwiftUI
 
 struct PortManagerApp: App {
     @StateObject private var state = AppState()
-    @AppStorage("menubar.enabled") private var menuBarEnabled = true
+    /// Read once at launch — `isInserted` with a live binding triggers a
+    /// SwiftUI KVO feedback loop (MenuBarExtraController spins at 100% CPU),
+    /// so the toggle applies on next launch.
+    private let menuBarEnabled = UserDefaults.standard.object(forKey: "menubar.enabled") as? Bool ?? true
 
     private func injectStores<Content: View>(into content: Content) -> some View {
         content
@@ -25,7 +28,7 @@ struct PortManagerApp: App {
             CommandGroup(replacing: .newItem) {}
         }
 
-        MenuBarExtra(isInserted: $menuBarEnabled) {
+        MenuBarExtra(isInserted: .constant(menuBarEnabled)) {
             injectStores(into: MenuBarPopover())
         } label: {
             injectStores(into: MenuBarLabel())

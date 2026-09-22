@@ -62,7 +62,7 @@ struct SettingsView: View {
             }
 
             Section("General") {
-                Toggle("Show in menu bar", isOn: $menuBarEnabled)
+                Toggle("Show in menu bar (applies after relaunch)", isOn: $menuBarEnabled)
                 Toggle("Launch at login", isOn: launchAtLogin)
             }
         }
