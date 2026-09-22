@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 
 /// CPU/memory usage for one process, from a single `ps` snapshot.
-struct ProcStat: Sendable {
+struct ProcStat: Sendable, Hashable {
     var cpu: Double
     var mem: Double
 }

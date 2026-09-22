@@ -9,15 +9,18 @@ struct PortListView: View {
     @State private var showInspector = true
     @State private var killTarget: PortEntry?
     @State private var presetTarget: PortEntry?
+    @State private var sortOrder: [RowComparator] = [RowComparator(key: .port)]
 
     private var filtered: [PortEntry] {
-        ports.entries.filter { entry in
-            (!localOnly || entry.isLocalOnly) &&
-            (search.isEmpty
-                || entry.command.localizedCaseInsensitiveContains(search)
-                || String(entry.port).contains(search)
-                || entry.address.contains(search))
-        }
+        ports.entries
+            .filter { entry in
+                (!localOnly || entry.isLocalOnly) &&
+                (search.isEmpty
+                    || entry.command.localizedCaseInsensitiveContains(search)
+                    || String(entry.port).contains(search)
+                    || entry.address.contains(search))
+            }
+            .sorted(using: sortOrder)
     }
 
     private var selectedEntry: PortEntry? {
@@ -26,14 +29,14 @@ struct PortListView: View {
     }
 
     var body: some View {
-        Table(filtered, selection: $selection) {
-            TableColumn("Port") { entry in
+        Table(filtered, selection: $selection, sortOrder: $sortOrder) {
+            TableColumn("Port", sortUsing: RowComparator(key: .port)) { entry in
                 Text(entry.port, format: .number.grouping(.never))
                     .font(.body.monospacedDigit())
             }
             .width(min: 50, ideal: 64)
 
-            TableColumn("Process") { entry in
+            TableColumn("Process", sortUsing: RowComparator(key: .command)) { entry in
                 HStack(spacing: 6) {
                     Image(nsImage: IconCache.shared.icon(for: entry.pid))
                     Text(entry.command).lineLimit(1)
@@ -41,32 +44,36 @@ struct PortListView: View {
             }
             .width(min: 120, ideal: 200)
 
-            TableColumn("PID") { entry in
+            TableColumn("PID", sortUsing: RowComparator(key: .pid)) { entry in
                 Text(verbatim: "\(entry.pid)").foregroundStyle(.secondary)
             }
             .width(56)
 
-            TableColumn("Bind", value: \.address)
-                .width(min: 60, ideal: 96)
+            TableColumn("Bind", sortUsing: RowComparator(key: .address)) { entry in
+                Text(entry.address)
+            }
+            .width(min: 60, ideal: 96)
 
-            TableColumn("Proto") { entry in
+            TableColumn("Proto", sortUsing: RowComparator(key: .proto)) { entry in
                 Text(entry.proto.rawValue)
                     .foregroundStyle(.secondary)
             }
             .width(44)
 
-            TableColumn("CPU") { entry in
+            TableColumn("CPU", sortUsing: RowComparator(key: .cpu, stats: ports.stats)) { entry in
                 statText(ports.stats[entry.pid]?.cpu)
             }
             .width(52)
 
-            TableColumn("Mem") { entry in
+            TableColumn("Mem", sortUsing: RowComparator(key: .mem, stats: ports.stats)) { entry in
                 statText(ports.stats[entry.pid]?.mem)
             }
             .width(52)
 
-            TableColumn("User", value: \.user)
-                .width(min: 60, ideal: 90)
+            TableColumn("User", sortUsing: RowComparator(key: .user)) { entry in
+                Text(entry.user)
+            }
+            .width(min: 60, ideal: 90)
 
             TableColumn("Preset") { entry in
                 if let preset = presets.preset(for: entry) {
@@ -197,5 +204,43 @@ struct PortListView: View {
     private func openInBrowser(_ entry: PortEntry) {
         guard let url = URL(string: "http://localhost:\(entry.port)") else { return }
         NSWorkspace.shared.open(url)
+    }
+}
+
+/// One comparator type for every sortable column — Table requires a single
+/// concrete element type in its sort order, so cpu/mem (looked up from
+/// PortStore.stats) and key path fields share this struct.
+private struct RowComparator: SortComparator, Hashable {
+    typealias Compared = PortEntry
+    enum Key { case port, command, pid, address, proto, user, cpu, mem }
+    var order: SortOrder = .forward
+    var key: Key
+    var stats: [pid_t: ProcStat] = [:]
+
+    func compare(_ lhs: PortEntry, _ rhs: PortEntry) -> ComparisonResult {
+        let cmp: ComparisonResult = switch key {
+        case .port: Self.cmp(lhs.port, rhs.port)
+        case .command: Self.cmp(lhs.command, rhs.command)
+        case .pid: Self.cmp(lhs.pid, rhs.pid)
+        case .address: Self.cmp(lhs.address, rhs.address)
+        case .proto: Self.cmp(lhs.proto.rawValue, rhs.proto.rawValue)
+        case .user: Self.cmp(lhs.user, rhs.user)
+        case .cpu: Self.cmp(stat(lhs, \.cpu), stat(rhs, \.cpu))
+        case .mem: Self.cmp(stat(lhs, \.mem), stat(rhs, \.mem))
+        }
+        guard order == .reverse else { return cmp }
+        return switch cmp {
+        case .orderedAscending: .orderedDescending
+        case .orderedDescending: .orderedAscending
+        default: .orderedSame
+        }
+    }
+
+    private func stat(_ entry: PortEntry, _ field: KeyPath<ProcStat, Double>) -> Double {
+        stats[entry.pid].map { $0[keyPath: field] } ?? -.infinity
+    }
+
+    private static func cmp<T: Comparable>(_ a: T, _ b: T) -> ComparisonResult {
+        a == b ? .orderedSame : a < b ? .orderedAscending : .orderedDescending
     }
 }
