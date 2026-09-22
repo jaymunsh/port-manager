@@ -33,12 +33,24 @@ conflict  — 리스너 있는데 command가 expectedCommand와 불일치
 - `notifyNewListeners` — 새 리스너 등장
 - `notifyPresetConflicts` — 프리셋 충돌
 - `notifyDiskEvents` — 마운트/제거
+- `notifyBandwidth` — 대역폭 임계치 초과
 
 **baseline 규칙**: 앱 시작 시 첫 스냅샷/디스크 flood는 "새 이벤트"가 아니라 기준선 — 알림/로그를 안 쏜다.
 
-## Activity 로그
+## 대역폭 알림 (BandwidthAlert)
 
-`ActivityStore` — 최대 300개 링버퍼, 최신이 위. 종류: `listener`, `preset`, `disk`, `device`, `process`(안전 종료).
+`AlertStore`가 `alerts.json`에 규칙을 영속화. 규칙은 **포트** 또는 **프로세스명**(부분 포함) 타깃 + 임계치(bytes/s).
+
+- Ports 테이블 우클릭 "Bandwidth Alert…"로 생성, Presets 탭의 "Bandwidth Alerts" 섹션에서 목록/편집/비활성화
+- 평가: `PortStore`의 nettop 루프(~5초)가 끝날 때마다 `onRates` 핸들러 → `MonitorEngine.evaluateBandwidthAlerts`
+- rate 계산: 포트 규칙은 해당 포트 소켓들의 connRates 합, 없으면 리스너 pid의 프로세스 합계. 프로세스 규칙은 매칭 pid들의 netRates 합
+- **전환 알림**: `alertOver` 맵으로 이전 상태를 기억 — 정상→초과 순간만 로그+알림 (계속 초과 상태면 조용)
+
+## Activity 로그 + 히스토리
+
+`ActivityStore` — 최대 500개 링버퍼, 최신이 위. 종류: `listener`, `preset`, `disk`, `device`, `process`(안전 종료), `bandwidth`.
+
+`HistoryService`가 각 이벤트를 JSONL로 `~/Library/Application Support/PortManager/history/history-YYYY-MM-DD.jsonl`에 append — 껐다 켜도 로그가 남는다. 보관일은 Settings의 "Keep activity for"(기본 7일, `history.retentionDays`), 시작 시 오래된 파일 prune + 최근 파일을 메모리로 로드.
 
 "변화"만 기록 — 정적 상태는 안 올라온다.
 

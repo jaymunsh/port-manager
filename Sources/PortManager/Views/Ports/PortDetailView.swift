@@ -2,6 +2,8 @@ import SwiftUI
 
 /// Inspector panel showing live detail for a selected port entry.
 struct PortDetailView: View {
+    @EnvironmentObject var ports: PortStore
+
     let entry: PortEntry
     var onKill: (PortEntry) -> Void
 
@@ -13,6 +15,8 @@ struct PortDetailView: View {
                 header
                 Divider()
                 processSection
+                chainSection
+                containerSection
                 Divider()
                 actions
             }
@@ -83,6 +87,63 @@ struct PortDetailView: View {
                 ProgressView().controlSize(.small)
             }
         }
+    }
+
+    /// launchd → Terminal → npm → node style parent chain.
+    @ViewBuilder
+    private var chainSection: some View {
+        let chain = ProcessService.ancestorChain(of: entry.pid, stats: ports.stats)
+        if !chain.isEmpty {
+            Divider()
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Launched by").font(.subheadline.bold())
+                ForEach(Array(chain.enumerated()), id: \.element.pid) { index, node in
+                    HStack(spacing: 4) {
+                        if index > 0 {
+                            Image(systemName: "arrow.turn.down.right")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                        Image(nsImage: IconCache.shared.icon(for: node.pid))
+                        Text(Self.commandName(node.command))
+                            .font(.caption)
+                            .lineLimit(1)
+                        Text(verbatim: "pid \(node.pid)")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Docker container backing this port, if the socket belongs to the
+    /// docker proxy shim (`com.docker.backend` holds published ports).
+    @ViewBuilder
+    private var containerSection: some View {
+        if entry.command.localizedCaseInsensitiveContains("docker"),
+           let container = ports.container(forPort: entry.port) {
+            Divider()
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Docker Container").font(.subheadline.bold())
+                LabeledContent("Name") {
+                    Text(container.name).font(.caption.monospaced())
+                }
+                LabeledContent("Image") {
+                    Text(container.image).font(.caption.monospaced())
+                        .lineLimit(2).truncationMode(.middle)
+                }
+                LabeledContent("ID") {
+                    Text(verbatim: container.id).font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    /// `comm` is a full executable path — show the basename.
+    static func commandName(_ path: String) -> String {
+        URL(fileURLWithPath: path).lastPathComponent
     }
 
     private var actions: some View {

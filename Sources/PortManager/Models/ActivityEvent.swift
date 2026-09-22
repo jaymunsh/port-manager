@@ -1,15 +1,16 @@
 import Foundation
 
-struct ActivityEvent: Identifiable, Hashable, Sendable {
-    enum Kind: String, Sendable {
+struct ActivityEvent: Identifiable, Hashable, Codable, Sendable {
+    enum Kind: String, Codable, Sendable {
         case listener
         case preset
         case disk
         case device
         case process
+        case bandwidth
     }
 
-    let id = UUID()
+    var id = UUID()
     let date: Date
     let kind: Kind
     let message: String

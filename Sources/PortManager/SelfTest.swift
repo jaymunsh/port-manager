@@ -129,11 +129,15 @@ enum SelfTest {
 
             section("ProcessService.parseStats")
 
-            let psOut = "    1   0.0   0.1\n  497  12.3   2.5\nnotapid x y\n"
+            let psOut = "    1     0   0.0   0.1 /sbin/launchd\n  497     1  12.3   2.5 /usr/sbin/rapportd\nnotapid x y z\n"
             let stats = ProcessService.parseStats(psOut)
             check(stats[497]?.cpu == 12.3 && stats[497]?.mem == 2.5,
                   "parses pid/cpu/mem")
+            check(stats[497]?.ppid == 1 && stats[1]?.command == "/sbin/launchd",
+                  "parses ppid/comm")
             check(stats[1] != nil && stats[999] == nil, "skips malformed lines")
+            let chain = ProcessService.ancestorChain(of: 497, stats: stats)
+            check(chain.first?.pid == 1, "ancestor chain reaches launchd")
 
             // MARK: NettopProvider.parse
 
@@ -149,6 +153,19 @@ enum SelfTest {
             check(net.perConn[k]?.bytesIn == 700, "parses per-connection counters")
             let listenerKey = NettopProvider.ConnKey(pid: 836, localPort: 3000, remotePort: 0)
             check(net.perConn[listenerKey] != nil, "wildcard remote → port 0 key")
+
+            // MARK: DockerProvider.parse
+
+            section("DockerProvider.parse")
+
+            let dockerOut = "a1b2c3|postgres:16|db|0.0.0.0:5432->5432/tcp, :::5432->5432/tcp\n" +
+                "d4e5f6|redis:7|cache|127.0.0.1:6379->6379/tcp\n" +
+                "zzz|internal-only|worker|\n"
+            let docker = DockerProvider.parse(dockerOut)
+            check(docker.containers.count == 3, "parses container rows")
+            check(docker.byPort[5432]?.image == "postgres:16", "maps host port to container")
+            check(docker.byPort[6379]?.name == "cache", "localhost binding parsed")
+            check(docker.byPort[80] == nil, "container-only ports not mapped")
 
             // MARK: LsofProvider (live)
 

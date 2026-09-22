@@ -45,6 +45,23 @@ TST=<st> — TCP 상태 (LISTEN, ESTABLISHED, ...)
 
 `PortEntry.isListener`: `remote == nil && (proto == .udp || state == "LISTEN")` — UDP는 LISTEN 상태가 없어서 바인드 소켓을 리스너 취급.
 
+## 뷰 모드: 소켓 테이블 / 프로세스 그룹
+
+툴바의 `square.stack.3d.up` 토글로 두 모드를 바꾼다 (`ports.groupByProcess` 영속화):
+
+- **소켓 모드** (기본): 소켓당 한 행의 `Table` — 정렬/필터/CSV 대상
+- **프로세스 모드**: `ProcessGroupView` — pid로 `ProcessGroup`을 만들어 DisclosureGroup 리스트로 표시. 헤더에 포트 목록·연결 수·CPU/Mem·프로세스 대역폭 합계, 펼치면 소켓 행들. "누가 뭘 쓰나"를 볼 때 유용
+
+## Docker 매핑
+
+호스트의 published 포트는 `com.docker.backend`(프록시 shim)가 점유해서 실제 컨테이너가 보이지 않는다. `DockerProvider`가 `docker ps --format '{{.ID}}|{{.Image}}|{{.Names}}|{{.Ports}}'`를 15초 주기로 폴링해 `hostPort → DockerContainer` 맵을 만든다 (`PortStore.dockerByPort`). `Ports` 필드(`0.0.0.0:5432->5432/tcp, :::5432->5432/tcp`)에서 `->` 왼쪽의 마지막 `:` 뒤 숫자만 hostPort로 파싱 — `mapping.range(of: "->")`를 써야 한다 (`firstIndex(of: ">")`로 자르면 `5432-`가 남아 실패 — 실제로 테스트가 잡아낸 버그).
+
+표시 위치: Process 컬럼의 이미지 배지(`postgres:16`), 그룹 헤더의 `🐳` 배지, 인스펙터의 "Docker Container" 섹션(name/image/id). docker 없는 환경에서는 조용히 빈 맵.
+
+## 프로세스 체인
+
+`ps -axo pid=,ppid=,%cpu=,%mem=,comm=` 스냅샷이 ppid까지 수집하므로, `ProcessService.ancestorChain`이 테이블을 타고 launchd까지 올라간다. 인스펙터 "Launched by"에 `launchd → Terminal → npm → node` 형태로 표시 — "이 포트 점유자가 어디서 떴나" 추적용.
+
 ## 테이블
 
 `PortListView` — SwiftUI `Table` + 커스텀 `RowComparator`(모든 컬럼이 같은 concrete `SortComparator` 타입이어야 하는 SwiftUI 제약):

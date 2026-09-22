@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var ports: PortStore
     @EnvironmentObject var monitor: MonitorEngine
+    @EnvironmentObject var activity: ActivityStore
     @AppStorage("menubar.enabled") private var menuBarEnabled = true
 
     private var launchAtLogin: Binding<Bool> {
@@ -59,6 +60,20 @@ struct SettingsView: View {
                 Toggle("New listeners", isOn: notifyBinding(\.notifyNewListeners))
                 Toggle("Preset conflicts", isOn: notifyBinding(\.notifyPresetConflicts))
                 Toggle("Disk mount / eject", isOn: notifyBinding(\.notifyDiskEvents))
+                Toggle("Bandwidth alerts", isOn: notifyBinding(\.notifyBandwidth))
+            }
+
+            Section("History") {
+                LabeledContent("Keep activity for") {
+                    Stepper(
+                        value: Binding(
+                            get: { activity.retentionDays },
+                            set: { activity.retentionDays = $0 }),
+                        in: 1...30) {
+                        Text(verbatim: "\(activity.retentionDays) days")
+                            .monospacedDigit()
+                    }
+                }
             }
 
             Section("General") {

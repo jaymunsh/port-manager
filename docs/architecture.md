@@ -43,18 +43,20 @@ PortManagerApp
 
 | Store | 역할 |
 |-------|------|
-| `PortStore` | `lsof` 스냅샷 폴링(기본 3초), CPU/Mem 통계(`ps` 1회 호출), nettop 대역폭. diff는 **리스너만** 계산해 핸들러에 통지 |
+| `PortStore` | `lsof` 스냅샷 폴링(기본 3초), CPU/Mem 통계(`ps` 1회 호출), nettop 대역폭, `docker ps` 매핑(15초), `groups` 프로세스 롤업. diff는 **리스너만** 계산해 핸들러에 통지 |
 | `DeviceStore` | DiskArbitration 이벤트 구독 + 볼륨 목록, USB/Thunderbolt 트리 (`system_profiler -json`), unmount/eject 연결 |
 | `NetworkStore` | 인터페이스별 바이트 카운터 폴링(2초) → delta → 초당 rate |
-| `PresetStore` | 프리셋 CRUD + `~/Library/Application Support/PortManager/presets.json` 영속화 + 상태 판정 |
-| `ActivityStore` | 이벤트 로그 링버퍼(최대 300개, 최신 우선) |
-| `MonitorEngine` | Store diff → Activity 로그 + 시스템 알림으로 변환하는 이벤트 라우터 |
+| `PresetStore` | 프리셋 CRUD + `presets.json` 영속화 + 상태 판정 |
+| `AlertStore` | 대역폭 알림 규칙 CRUD + `alerts.json` 영속화 + 현재 rate 계산 |
+| `ActivityStore` | 이벤트 로그 링버퍼(최대 500개) + `HistoryService`를 통한 JSONL 일별 파일 영속화 |
+| `MonitorEngine` | Store diff/rate → Activity 로그 + 시스템 알림으로 변환하는 이벤트 라우터 |
 
 ## 폴링 모델
 
 ```
 PortStore.pollTask      ──(interval, 기본 3s)──▶ lsof + ps
 PortStore.netTask       ──(연속)──▶ nettop     ← 호출당 ~5초 걸려서 분리됨
+PortStore.dockerTask    ──(15s)──▶ docker ps   ← 없는 환경도 고려해 분리
 NetworkStore.pollTask   ──(2s)──▶ netstat/ifconfig/scutil/CoreWLAN
 DeviceStore             ── DiskArbitration 콜백(이벤트 드리븐) + 수동 refresh
 ```
@@ -88,7 +90,8 @@ Sources/PortManager/
 ├── AppState.swift          # Store 컨테이너 + 사이드바 선택 상태
 ├── SelfTest.swift          # 인바이너리 테스트 러너
 ├── Models/                 # PortEntry, PortPreset, VolumeInfo, DeviceNode,
-│                           #   ProcessInfo, ActivityEvent, NetInterface, NetRate
+│                           #   ProcessInfo, ActivityEvent, NetInterface, NetRate,
+│                           #   ProcessGroup, DockerContainer, BandwidthAlert
 ├── Services/               # 외부 프로세스/API 래퍼 (위 표 참고)
 ├── Stores/                 # @MainActor 상태 + 폴링 + diff
 └── Views/

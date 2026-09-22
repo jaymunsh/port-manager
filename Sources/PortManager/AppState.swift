@@ -9,6 +9,7 @@ final class AppState: ObservableObject {
     let ports = PortStore()
     let devices = DeviceStore()
     let presets = PresetStore()
+    let alerts = AlertStore()
     let activity = ActivityStore()
     let monitor = MonitorEngine()
     let network = NetworkStore()
@@ -22,6 +23,7 @@ final class AppState: ObservableObject {
         ports.startPolling()
         devices.start()
         network.startPolling()
-        monitor.start(ports: ports, devices: devices, presets: presets, activity: activity)
+        monitor.start(ports: ports, devices: devices, presets: presets,
+                      activity: activity, alerts: alerts)
     }
 }

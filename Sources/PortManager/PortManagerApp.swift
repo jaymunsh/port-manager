@@ -13,6 +13,7 @@ struct PortManagerApp: App {
             .environmentObject(state.ports)
             .environmentObject(state.devices)
             .environmentObject(state.presets)
+            .environmentObject(state.alerts)
             .environmentObject(state.activity)
             .environmentObject(state.monitor)
             .environmentObject(state.network)

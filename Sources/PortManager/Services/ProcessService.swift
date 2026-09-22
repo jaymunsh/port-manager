@@ -5,6 +5,8 @@ import Foundation
 struct ProcStat: Sendable, Hashable {
     var cpu: Double
     var mem: Double
+    var ppid: pid_t = 0
+    var command: String = ""
 }
 
 struct ProcessService: Sendable {
@@ -79,8 +81,9 @@ struct ProcessService: Sendable {
     }
 
     /// CPU/mem for every process in one `ps` call — cheap enough to run per refresh.
+    /// Also captures ppid+comm so the UI can reconstruct the parent chain.
     func allStats() -> [pid_t: ProcStat] {
-        guard let res = try? Shell.run("/bin/ps", ["-axo", "pid=,%cpu=,%mem="]) else { return [:] }
+        guard let res = try? Shell.run("/bin/ps", ["-axo", "pid=,ppid=,%cpu=,%mem=,comm="]) else { return [:] }
         return Self.parseStats(res.stdout)
     }
 
@@ -88,10 +91,34 @@ struct ProcessService: Sendable {
         var map: [pid_t: ProcStat] = [:]
         for line in output.split(separator: "\n") {
             let cols = line.split(separator: " ", omittingEmptySubsequences: true)
-            guard cols.count >= 3, let pid = pid_t(cols[0]) else { continue }
-            map[pid] = ProcStat(cpu: Double(cols[1]) ?? 0, mem: Double(cols[2]) ?? 0)
+            guard cols.count >= 4, let pid = pid_t(cols[0]) else { continue }
+            // comm is the remainder of the line — it may contain spaces.
+            let comm = cols.count > 4 ? cols[4...].joined(separator: " ") : ""
+            map[pid] = ProcStat(
+                cpu: Double(cols[2]) ?? 0,
+                mem: Double(cols[3]) ?? 0,
+                ppid: pid_t(cols[1]) ?? 0,
+                command: comm)
         }
         return map
+    }
+
+    /// Ancestor chain for `pid`: [(pid, command)] walking up to launchd.
+    /// Uses the stats table already collected by the store.
+    static func ancestorChain(of pid: pid_t, stats: [pid_t: ProcStat], maxDepth: Int = 12) -> [(pid: pid_t, command: String)] {
+        var chain: [(pid_t, String)] = []
+        var current = stats[pid]?.ppid ?? 0
+        var seen: Set<pid_t> = [pid]
+        while current > 1, !seen.contains(current), chain.count < maxDepth {
+            seen.insert(current)
+            guard let stat = stats[current] else { break }
+            chain.append((current, stat.command))
+            current = stat.ppid
+        }
+        if current <= 1 && !seen.contains(1), let launchd = stats[1] {
+            chain.append((1, launchd.command))
+        }
+        return chain.reversed() // launchd … parent
     }
 
     /// Sends a signal; returns nil on success.

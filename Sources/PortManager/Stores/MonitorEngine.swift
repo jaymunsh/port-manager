@@ -12,6 +12,9 @@ final class MonitorEngine: ObservableObject {
     @Published var notifyDiskEvents = MonitorEngine.defaultsBool("notify.diskEvents") {
         didSet { Self.persist(key: "notify.diskEvents", value: notifyDiskEvents) }
     }
+    @Published var notifyBandwidth = MonitorEngine.defaultsBool("notify.bandwidth") {
+        didSet { Self.persist(key: "notify.bandwidth", value: notifyBandwidth) }
+    }
 
     private static func defaultsBool(_ key: String) -> Bool {
         UserDefaults.standard.object(forKey: key) as? Bool ?? true
@@ -25,12 +28,22 @@ final class MonitorEngine: ObservableObject {
     private var started = false
     /// Last known status per preset — transitions are what we notify on.
     private var presetStatuses: [UUID: PresetStatus] = [:]
+    /// Whether each bandwidth alert was over threshold last tick.
+    private var alertOver: [UUID: Bool] = [:]
 
     func start(ports: PortStore, devices: DeviceStore,
-               presets: PresetStore, activity: ActivityStore) {
+               presets: PresetStore, activity: ActivityStore,
+               alerts: AlertStore) {
         guard !started else { return }
         started = true
         notifier.requestPermission()
+
+        ports.onRates { [weak self] in
+            self?.evaluateBandwidthAlerts(
+                alerts: alerts, entries: ports.entries,
+                netRates: ports.netRates, connRates: ports.connRates,
+                activity: activity)
+        }
 
         ports.onDiff { [weak self] added, removed in
             guard let self else { return }
@@ -71,6 +84,27 @@ final class MonitorEngine: ObservableObject {
                 case .changed:
                     break
                 }
+            }
+        }
+    }
+
+    /// Notify only on the normal→over transition, not while it stays over.
+    private func evaluateBandwidthAlerts(alerts: AlertStore, entries: [PortEntry],
+                                         netRates: [pid_t: NetRate],
+                                         connRates: [NettopProvider.ConnKey: NetRate],
+                                         activity: ActivityStore) {
+        for alert in alerts.alerts where alert.enabled {
+            let rate = alerts.currentRate(
+                for: alert, entries: entries, netRates: netRates, connRates: connRates)
+            let isOver = rate > alert.threshold
+            let wasOver = alertOver[alert.id] ?? false
+            alertOver[alert.id] = isOver
+            guard isOver, !wasOver else { continue }
+            let label = alert.port.map { ":\($0)" } ?? alert.command ?? alert.name
+            let msg = "\(alert.name) (\(label)) at ↓↑\(ByteFormat.rate(rate))/s — threshold \(ByteFormat.rate(alert.threshold))/s"
+            activity.log(.bandwidth, msg)
+            if notifyBandwidth {
+                notifier.post(title: "Bandwidth alert", body: msg)
             }
         }
     }

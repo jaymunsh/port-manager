@@ -46,6 +46,7 @@ struct ActivityLogView: View {
         case .disk: "externaldrive.fill"
         case .device: "cable.connector"
         case .process: "xmark.circle"
+        case .bandwidth: "speedometer"
         }
     }
 
@@ -56,6 +57,7 @@ struct ActivityLogView: View {
         case .disk: .purple
         case .device: .teal
         case .process: .red
+        case .bandwidth: .pink
         }
     }
 }

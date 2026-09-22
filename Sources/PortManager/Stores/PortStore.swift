@@ -8,6 +8,9 @@ final class PortStore: ObservableObject {
     @Published private(set) var netRates: [pid_t: NetRate] = [:]
     /// Per-socket rates keyed by pid+local port+remote port.
     @Published private(set) var connRates: [NettopProvider.ConnKey: NetRate] = [:]
+    /// Running Docker containers, keyed lookup by published host port.
+    @Published private(set) var dockerByPort: [Int: DockerContainer] = [:]
+    @Published private(set) var dockerContainers: [DockerContainer] = []
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var lastError: String?
     @Published var includeUDP = UserDefaults.standard.bool(forKey: "ports.includeUDP") {
@@ -32,12 +35,19 @@ final class PortStore: ObservableObject {
 
     private var pollTask: Task<Void, Never>?
     private var netTask: Task<Void, Never>?
+    private var dockerTask: Task<Void, Never>?
     private var diffHandlers: [([PortEntry], [PortEntry]) -> Void] = []
+    private var rateHandlers: [() -> Void] = []
     private var prevNet: [pid_t: (in: Int64, out: Int64, at: Date)] = [:]
     private var prevConn: [NettopProvider.ConnKey: (in: Int64, out: Int64, at: Date)] = [:]
 
     func onDiff(_ handler: @escaping ([PortEntry], [PortEntry]) -> Void) {
         diffHandlers.append(handler)
+    }
+
+    /// Called after each nettop-derived rate update (~every 5s).
+    func onRates(_ handler: @escaping () -> Void) {
+        rateHandlers.append(handler)
     }
 
     func startPolling() {
@@ -62,6 +72,20 @@ final class PortStore: ObservableObject {
                 guard !Task.isCancelled else { return }
                 self.netRates = Self.rates(from: net.perPid, previous: &self.prevNet)
                 self.connRates = Self.rates(from: net.perConn, previous: &self.prevConn)
+                for handler in self.rateHandlers { handler() }
+            }
+        }
+        // Docker is optional and its CLI is slow-ish — poll on its own cadence.
+        dockerTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let snap = await Task.detached(priority: .utility) {
+                    DockerProvider().snapshot()
+                }.value
+                guard !Task.isCancelled else { return }
+                self.dockerContainers = snap.containers
+                self.dockerByPort = snap.byPort
+                try? await Task.sleep(for: .seconds(15))
             }
         }
     }
@@ -71,6 +95,26 @@ final class PortStore: ObservableObject {
         pollTask = nil
         netTask?.cancel()
         netTask = nil
+        dockerTask?.cancel()
+        dockerTask = nil
+    }
+
+    /// Entries rolled up per process for the grouped view.
+    var groups: [ProcessGroup] {
+        Dictionary(grouping: entries, by: \.pid)
+            .map { pid, sockets in
+                ProcessGroup(
+                    pid: pid,
+                    command: sockets.first?.command ?? "?",
+                    user: sockets.first?.user ?? "",
+                    sockets: sockets.sorted { $0.port < $1.port })
+            }
+            .sorted { ($0.primaryPort, $0.command) < ($1.primaryPort, $1.command) }
+    }
+
+    /// Docker container publishing this host port, if any.
+    func container(forPort port: Int) -> DockerContainer? {
+        dockerByPort[port]
     }
 
     func refresh() async {
