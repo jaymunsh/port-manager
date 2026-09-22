@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var ports: PortStore
     @EnvironmentObject var monitor: MonitorEngine
+    @AppStorage("menubar.enabled") private var menuBarEnabled = true
 
     private var launchAtLogin: Binding<Bool> {
         Binding(
@@ -61,6 +62,7 @@ struct SettingsView: View {
             }
 
             Section("General") {
+                Toggle("Show in menu bar", isOn: $menuBarEnabled)
                 Toggle("Launch at login", isOn: launchAtLogin)
             }
         }

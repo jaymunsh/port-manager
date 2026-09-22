@@ -6,7 +6,6 @@ struct MenuBarPopover: View {
     @EnvironmentObject var presets: PresetStore
     @EnvironmentObject var devices: DeviceStore
     @Environment(\.openWindow) private var openWindow
-    @Environment(\.openSettings) private var openSettings
     @State private var killTarget: PortEntry?
 
     var body: some View {
@@ -139,11 +138,15 @@ struct MenuBarPopover: View {
             .controlSize(.small)
 
             Button {
-                openSettings()
+                // openSettings() is a no-op from a MenuBarExtra when the app
+                // isn't active; activate first, then route the standard action.
+                NSApp.activate(ignoringOtherApps: true)
+                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
             } label: {
                 Image(systemName: "gear")
             }
             .controlSize(.small)
+            .help("Settings")
 
             Spacer()
 

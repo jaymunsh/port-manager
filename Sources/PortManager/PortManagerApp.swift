@@ -2,6 +2,7 @@ import SwiftUI
 
 struct PortManagerApp: App {
     @StateObject private var state = AppState()
+    @AppStorage("menubar.enabled") private var menuBarEnabled = true
 
     private func injectStores<Content: View>(into content: Content) -> some View {
         content
@@ -24,7 +25,7 @@ struct PortManagerApp: App {
             CommandGroup(replacing: .newItem) {}
         }
 
-        MenuBarExtra {
+        MenuBarExtra(isInserted: $menuBarEnabled) {
             injectStores(into: MenuBarPopover())
         } label: {
             injectStores(into: MenuBarLabel())
