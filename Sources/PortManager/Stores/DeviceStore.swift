@@ -13,6 +13,9 @@ final class DeviceStore: ObservableObject {
 
     private let disks = DiskService()
     private var started = false
+    /// DA fires "appeared" for every disk already attached when the session
+    /// starts — suppress event reporting until that initial flood has passed.
+    private var suppressingBaseline = true
 
     func start() {
         guard !started else { return }
@@ -22,6 +25,10 @@ final class DeviceStore: ObservableObject {
         }
         disks.start()
         Task { await refresh() }
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            suppressingBaseline = false
+        }
     }
 
     func refresh() async {
@@ -57,17 +64,34 @@ final class DeviceStore: ObservableObject {
     }
 
     private func handle(_ event: DiskEvent) {
-        onDiskEvent?(event)
         switch event {
         case .appeared(let info):
-            if !volumes.contains(info) { volumes.append(info) }
-            volumes.sort { $0.volumeName < $1.volumeName }
+            if !volumes.contains(info) {
+                volumes.append(info)
+                volumes.sort { $0.volumeName < $1.volumeName }
+            }
+            if !suppressingBaseline { onDiskEvent?(event) }
         case .disappeared(let bsd):
             volumes.removeAll { $0.bsdName == bsd }
+            onDiskEvent?(event)
         case .changed(let info):
-            if let idx = volumes.firstIndex(where: { $0.bsdName == info.bsdName }) {
+            let idx = volumes.firstIndex { $0.bsdName == info.bsdName }
+            let wasMounted = idx.map { volumes[$0].mountPoint != nil } ?? false
+            if let idx {
                 volumes[idx] = info
+            } else if info.mountPoint != nil {
+                volumes.append(info)
+                volumes.sort { $0.volumeName < $1.volumeName }
             }
+            // Mount/unmount of an attached disk arrives as .changed, not
+            // .appeared — surface the transition so it still gets logged.
+            if !wasMounted, info.mountPoint != nil, !suppressingBaseline {
+                onDiskEvent?(.appeared(info))
+            } else if wasMounted, info.mountPoint == nil {
+                onDiskEvent?(.unmounted(info))
+            }
+        case .unmounted:
+            onDiskEvent?(event)
         }
     }
 }

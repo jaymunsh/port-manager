@@ -39,10 +39,16 @@ final class MonitorEngine: ObservableObject {
                 guard let self else { return }
                 switch event {
                 case .appeared(let info):
-                    activity.log(.disk, "\(info.volumeName) mounted at \(info.mountPoint ?? info.bsdName)")
+                    if let mount = info.mountPoint {
+                        activity.log(.disk, "\(info.volumeName) mounted at \(mount)")
+                    } else {
+                        activity.log(.disk, "\(info.volumeName) attached (not mounted)")
+                    }
                     if self.notifyDiskEvents {
                         self.notifier.post(title: "Disk mounted", body: info.volumeName)
                     }
+                case .unmounted(let info):
+                    activity.log(.disk, "\(info.volumeName) unmounted")
                 case .disappeared(let bsd):
                     activity.log(.disk, "\(bsd) removed")
                     if self.notifyDiskEvents {

@@ -5,6 +5,7 @@ enum DiskEvent: Sendable {
     case appeared(VolumeInfo)
     case disappeared(bsdName: String)
     case changed(VolumeInfo)
+    case unmounted(VolumeInfo)
 }
 
 enum DiskServiceError: Error, Sendable {
@@ -62,9 +63,11 @@ final class DiskService: @unchecked Sendable {
         guard let raw = DADiskCopyDescription(disk) as? [String: Any] else { return nil }
         let bsd = raw[kDADiskDescriptionMediaBSDNameKey as String] as? String ?? ""
         guard !bsd.isEmpty else { return nil }
-        let volName = raw[kDADiskDescriptionVolumeNameKey as String] as? String ?? bsd
+        let volName = raw[kDADiskDescriptionVolumeNameKey as String] as? String
         let mount = (raw[kDADiskDescriptionVolumePathKey as String] as? URL)?.path
         let kind = raw[kDADiskDescriptionVolumeKindKey as String] as? String ?? ""
+        // Skip whole disks, APFS containers, and EFI — only real volumes.
+        guard volName != nil || mount != nil, kind != "efi" else { return nil }
         let size = (raw[kDADiskDescriptionMediaSizeKey as String] as? NSNumber)?.int64Value ?? 0
         let ejectable = (raw[kDADiskDescriptionMediaEjectableKey as String] as? NSNumber)?.boolValue ?? false
             || (raw[kDADiskDescriptionMediaRemovableKey as String] as? NSNumber)?.boolValue ?? false
@@ -78,7 +81,7 @@ final class DiskService: @unchecked Sendable {
             available = Int64(values.volumeAvailableCapacity ?? 0)
         }
         return VolumeInfo(
-            bsdName: bsd, volumeName: volName, mountPoint: mount,
+            bsdName: bsd, volumeName: volName ?? bsd, mountPoint: mount,
             fileSystem: kind, totalBytes: size, availableBytes: available,
             isEjectable: ejectable, deviceProtocol: proto
         )
