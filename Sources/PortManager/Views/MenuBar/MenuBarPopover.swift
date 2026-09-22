@@ -16,6 +16,7 @@ struct MenuBarPopover: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     presetsSection
+                    listenersSection
                     volumesSection
                 }
                 .padding(12)
@@ -24,7 +25,7 @@ struct MenuBarPopover: View {
             Divider()
             footer
         }
-        .frame(width: 340, height: 420)
+        .frame(width: 340, height: 480)
         .onAppear { state.start() }
         .sheet(item: $killTarget) { entry in
             KillSheet(entry: entry)
@@ -75,6 +76,38 @@ struct MenuBarPopover: View {
                 }
             }
             .font(.callout)
+        }
+    }
+
+    /// Top listeners by current CPU — a glanceable "what's busiest" list.
+    @ViewBuilder
+    private var listenersSection: some View {
+        let top = ports.entries.filter(\.isListener)
+            .sorted { (ports.stats[$0.pid]?.cpu ?? 0) > (ports.stats[$1.pid]?.cpu ?? 0) }
+        Text("Listeners").font(.caption.bold()).foregroundStyle(.secondary)
+        if top.isEmpty {
+            Text("No listeners").font(.caption).foregroundStyle(.tertiary)
+        }
+        ForEach(top.prefix(10)) { entry in
+            HStack(spacing: 6) {
+                Image(nsImage: IconCache.shared.icon(for: entry.pid))
+                    .resizable().frame(width: 14, height: 14)
+                Text(verbatim: ":\(entry.port)")
+                    .font(.caption.monospacedDigit().bold())
+                Text(entry.command).lineLimit(1)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if let stat = ports.stats[entry.pid], stat.cpu > 0 {
+                    Text(verbatim: String(format: "%.0f%%", stat.cpu))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .font(.callout)
+        }
+        if top.count > 10 {
+            Text("… \(top.count - 10) more")
+                .font(.caption2).foregroundStyle(.tertiary)
         }
     }
 
