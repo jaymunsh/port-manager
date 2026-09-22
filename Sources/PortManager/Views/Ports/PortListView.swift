@@ -7,7 +7,7 @@ struct PortListView: View {
     @State private var search = ""
     @State private var selection: PortEntry.ID?
     @AppStorage("ports.localOnly") private var localOnly = false
-    @State private var showInspector = true
+    @State private var showInspector = false
     @State private var killTarget: PortEntry?
     @State private var presetTarget: PortEntry?
     @AppStorage("ports.sortKey") private var sortKeyRaw = "port"
@@ -169,6 +169,10 @@ struct PortListView: View {
             }
         }
         .onAppear { restoreSortOrder() }
+        .onChange(of: selection) { _, new in
+            // Inspector follows selection: open on select, close on deselect.
+            showInspector = new != nil
+        }
         .onChange(of: sortOrder) { _, new in saveSortOrder(new) }
         .sheet(item: $killTarget) { entry in
             KillSheet(entry: entry)
