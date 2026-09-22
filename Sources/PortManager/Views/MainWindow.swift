@@ -2,10 +2,9 @@ import SwiftUI
 
 struct MainWindow: View {
     @EnvironmentObject var state: AppState
-    @State private var section: SidebarSection = .ports
 
     enum SidebarSection: String, CaseIterable, Identifiable {
-        case ports, network, devices, presets, activity
+        case ports, network, devices, presets, activity, settings
 
         var id: String { rawValue }
 
@@ -16,6 +15,7 @@ struct MainWindow: View {
             case .devices: "Devices"
             case .presets: "Presets"
             case .activity: "Activity"
+            case .settings: "Settings"
             }
         }
 
@@ -26,24 +26,26 @@ struct MainWindow: View {
             case .devices: "externaldrive.connected.to.line.below"
             case .presets: "bookmark"
             case .activity: "list.bullet.rectangle"
+            case .settings: "gearshape"
             }
         }
     }
 
     var body: some View {
         NavigationSplitView {
-            List(SidebarSection.allCases, selection: $section) { item in
+            List(SidebarSection.allCases, selection: $state.section) { item in
                 Label(item.title, systemImage: item.icon)
                     .tag(item)
             }
             .navigationSplitViewColumnWidth(min: 160, ideal: 180, max: 220)
         } detail: {
-            switch section {
+            switch state.section {
             case .ports: PortListView()
             case .network: NetworkView()
             case .devices: DeviceListView()
             case .presets: PresetListView()
             case .activity: ActivityLogView()
+            case .settings: SettingsView()
             }
         }
         .onAppear { state.start() }

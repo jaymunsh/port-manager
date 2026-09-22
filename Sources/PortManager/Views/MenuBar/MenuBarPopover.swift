@@ -138,10 +138,11 @@ struct MenuBarPopover: View {
             .controlSize(.small)
 
             Button {
-                // openSettings() is a no-op from a MenuBarExtra when the app
-                // isn't active; activate first, then route the standard action.
+                // Deep-link into the main window's Settings tab — more
+                // reliable than openSettings() from a MenuBarExtra.
+                state.section = .settings
+                openWindow(id: "main")
                 NSApp.activate(ignoringOtherApps: true)
-                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
             } label: {
                 Image(systemName: "gear")
             }

@@ -2,6 +2,10 @@ import Foundation
 
 @MainActor
 final class AppState: ObservableObject {
+    /// Currently selected sidebar section — settable from the menu bar
+    /// popover so it can deep-link into e.g. Settings.
+    @Published var section: MainWindow.SidebarSection = .ports
+
     let ports = PortStore()
     let devices = DeviceStore()
     let presets = PresetStore()

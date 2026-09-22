@@ -67,7 +67,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 420)
+        .frame(maxWidth: 560, maxHeight: .infinity, alignment: .top)
         .padding()
     }
 }
