@@ -63,6 +63,7 @@ struct DeviceListView: View {
                 if let updated = devices.lastUpdated {
                     Text("Updated \(updated, format: .dateTime.hour().minute().second())")
                 }
+                if let error = devices.lastError { Text(error).foregroundStyle(.red) }
             }
             .font(.caption)
             .foregroundStyle(.secondary)

@@ -12,11 +12,12 @@ struct USBProvider: Sendable {
     }
 
     private func tree(forDataType dataType: String) throws -> [DeviceNode] {
-        let result = try Shell.run("/usr/sbin/system_profiler", [dataType, "-json"])
+        let result = try Shell.run("/usr/sbin/system_profiler", [dataType, "-json"], timeout: 30)
+        try result.requireSuccess(command: "system_profiler")
         guard let data = result.stdout.data(using: .utf8),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let buses = root[dataType] as? [[String: Any]] else {
-            return []
+            throw ShellError.commandFailed("system_profiler", result.status, "Invalid device report")
         }
         return buses.map { node(from: $0, kind: .bus) }
     }

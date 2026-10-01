@@ -12,5 +12,6 @@ struct MenuBarLabel: View {
                 .font(.caption.monospacedDigit())
         }
         .onAppear { state.start() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in state.stop() }
     }
 }

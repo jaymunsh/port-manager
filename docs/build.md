@@ -40,7 +40,8 @@ CLT 환경에는 `swift test` 러너가 없다 (`Testing`/`XCTest` 프레임워�
 ```swift
 // main.swift
 if CommandLine.arguments.contains("--selftest") {
-    SelfTest.run()
+    Task { @MainActor in await SelfTest.run() }
+    RunLoop.main.run()
 } else {
     PortManagerApp.main()
 }
@@ -53,6 +54,10 @@ if CommandLine.arguments.contains("--selftest") {
 - `NettopProvider.parse` — 프로세스 헤더 + 연결별 카운터
 - `PresetStore.status` — free/expected/conflict 규칙
 - `LsofProvider` live — 실제 `lsof` 스냅샷이 비어있지 않은지
+- 명령 실행 — stderr 대량 출력, 타임아웃, 취소 전달
+- 기록/감시 — 여러 날짜의 히스토리 복원·삭제, 초기 프리셋 충돌과 규칙 변경
+- 종료/꺼내기 — 보호 프로세스·PID 재사용 검사, 실패한 언마운트 이후 eject 중단
+- Store 수명 — 수집 직렬화, 오래된 옵션 결과 폐기, 폴링 일시정지, 대역폭 수집의 시작·중단과 DNS 캐시
 
 ## 앱 아이콘
 

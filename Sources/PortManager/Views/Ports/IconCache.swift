@@ -1,23 +1,25 @@
 import AppKit
 
-/// Lazily resolves the owning app's icon for a pid (via its executable path).
+/// Executable-path cache, bounded by NSCache. PIDs are resolved afresh so a
+/// reused PID can never inherit a previous process's icon.
 @MainActor
 final class IconCache {
     static let shared = IconCache()
+    private let cache = NSCache<NSString, NSImage>()
 
-    private var cache: [pid_t: NSImage] = [:]
+    init() { cache.countLimit = 256 }
 
     func icon(for pid: pid_t) -> NSImage {
-        if let image = cache[pid] { return image }
-        var path = ProcessService().executablePath(for: pid)
-        // Executables inside an .app bundle inherit the app's icon, not the
-        // generic binary icon — resolve to the bundle for a recognizable look.
+        var path = ProcessService().identity(for: pid)?.executablePath ?? ""
         if let range = path.range(of: ".app/") {
             path = String(path[..<range.lowerBound]) + ".app"
         }
-        let image = NSWorkspace.shared.icon(forFile: path.isEmpty ? "/usr/bin" : path)
+        if path.isEmpty { path = "/usr/bin" }
+        let key = path as NSString
+        if let image = cache.object(forKey: key) { return image }
+        let image = NSWorkspace.shared.icon(forFile: path)
         image.size = NSSize(width: 16, height: 16)
-        cache[pid] = image
+        cache.setObject(image, forKey: key)
         return image
     }
 }

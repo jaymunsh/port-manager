@@ -73,21 +73,22 @@ TST=<st> — TCP 상태 (LISTEN, ESTABLISHED, ...)
 - CSV보내기 (NSSavePanel)
 - 인스펙터: 기본 접힘, 행 선택 시 `.inspector`로 오픈 — 실행 경로, 시작 시각, CPU/Mem, 열린 파일 수, 자식 프로세스
 
-프로세스 아이콘은 `IconCache` — `proc_pidpath` → `NSWorkspace.icon(forFile:)` 캐시.
+프로세스 아이콘은 `IconCache` — native executable path → `NSWorkspace.icon(forFile:)` 캐시. 실행 경로로 키를 만들고 `NSCache`를 256개로 제한해 PID 재사용과 장시간 실행을 처리한다.
 
 ## 안전 종료 (`KillSheet`)
 
 상태 머신: `confirm → working → (done | needsForce | blocked | failed)`
 
 1. confirm — 프로세스 정보 표시 (경로, 시작 시각, **자식 프로세스 경고**), 보호 대상(pid 0/1, kernel_task/launchd/WindowServer/loginwindow)은 버튼 비활성
-2. SIGTERM 전송 → 500ms 간격으로 최대 5초 `kill(pid,0)` 생존 확인
-3. 안 죽으면 → `needsForce` — SIGKILL은 명시적 사용자 선택으로만
-4. `EPERM` → `blocked` — `sudo kill <pid>` 복사 버튼 제공 (권한 헬퍼는 코드사이닝 필요로 미구현)
-5. 성공 → Activity 로그 + 즉시 refresh
+2. 스냅샷에 기록한 libproc 시작 시각(마이크로초), 명령, 경로를 종료 직전에 다시 확인한다. 정보가 없거나 변경됐으면 종료하지 않는다. 서비스에서도 PID ≤1, 앱 자신, 시스템 프로세스를 보호한다.
+3. SIGTERM 전송 → 500ms 간격으로 최대 5초 동일 프로세스의 생존 확인. SIGKILL 전에도 신원을 재확인한다.
+4. 안 죽으면 → `needsForce` — SIGKILL은 명시적 사용자 선택으로만
+5. `EPERM` → `blocked` — `sudo kill <pid>` 복사 버튼 제공 (권한 헬퍼는 코드사이닝 필요로 미구현)
+6. 성공 → Activity 로그 + 즉시 refresh
 
 ## 대역폭: nettop
 
-`NettopProvider`는 `nettop -x -l 1 -J bytes_in,bytes_out`을 파싱한다. 출력은 2단 구조:
+`NettopProvider`는 `nettop -n -x -l 1 -J bytes_in,bytes_out`을 파싱한다. 출력은 2단 구조:
 
 ```
 node.836                                    1000    500      ← 프로세스 합계 (name.pid)
@@ -95,7 +96,7 @@ node.836                                    1000    500      ← 프로세스 �
 ```
 
 - 프로세스 행 → `perPid[pid]`
-- 연결 행 → `perConn[ConnKey(pid, localPort, remotePort)]` — lsof의 `remote`에서 포트를 뽑아 같은 키로 매칭. 와일드카드(`*:*`)는 remotePort 0
+- 연결 행 → `perConn[ConnKey(pid, proto, localAddress, localPort, remoteAddress, remotePort)]` — lsof와 숫자 주소를 같은 키로 매칭하며 IPv6 표기를 정규화한다. 와일드카드(`*:*`)는 remotePort 0
 
 Store에서 연속 스냅샷의 **delta ÷ 경과시간**으로 초당 rate를 만든다.
 
@@ -104,3 +105,7 @@ Store에서 연속 스냅샷의 **delta ÷ 경과시간**으로 초당 rate를 �
 - **연결 행** → 그 소켓 자신의 rate — 같은 pid의 소켓들이 전부 같은 값을 보여주던 문제 해결
 
 주의: `nettop` 호출은 무조건 ~5초 — PortStore의 별도 `netTask` 루프에서 돌아 포트 목록 갱신을 막지 않는다.
+
+## 명령 실행 안정성
+
+`Shell.run`은 stdout/stderr를 nonblocking으로 함께 읽는다. 기본 15초 제한시간(장치 스캔은 30초)과 취소를 지원하며, 종료되지 않는 자식은 SIGTERM 후 SIGKILL로 정리한다. 부모가 끝난 뒤 자손이 출력 pipe를 잡고 있어도 EOF를 무한 대기하지 않는다. 수집 실패는 빈 목록으로 덮지 않고 마지막 결과와 오류를 표시한다.

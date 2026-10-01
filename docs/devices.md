@@ -28,11 +28,12 @@
 
 흐름: 확인 → unmount → eject
 
-- `DADiskUnmount` 먼저, 실패 시 `lsof`로 마운트 포인트 점유 프로세스를 찾아 목록 표시 → Force Eject(강제 unmount) 옵션 제공
+- `DADiskUnmount`에 whole-device 옵션을 사용해 모든 형제 볼륨을 먼저 unmount한다. 강제 모드에서도 unmount가 실패하면 eject하지 않는다.
+- 실패 시 모든 형제 볼륨의 마운트 포인트를 `lsof -nP -Fpc`로 백그라운드 조회해 PID/명령 목록을 표시한다. Retry와 Force Eject(강제 unmount) 옵션을 제공한다. 조회 실패도 원래 eject 오류와 함께 표시한다.
 - `DADiskEject`는 볼륨의 **부모 물리 디스크**를 꺼냄 — 파티션이 여러 개여도 디스크 전체가 안전 제거됨
-- 성공/실패 모두 Activity 로그
+- 성공은 Activity 로그에 기록하고, 실패 원인은 시트에 표시한다. 메뉴바도 같은 시트를 사용한다.
 
-실기 검증됨: 1TB 외장 NVMe(`LocalLLM`)로 unmount→eject→재마운트까지 확인.
+기존 버전 실기 검증: 1TB 외장 NVMe(`LocalLLM`)로 unmount→eject→재마운트까지 확인.
 
 ## USB / Thunderbolt 트리
 
@@ -41,3 +42,5 @@
 - `_items` 재귀로 버스 → 허브 → 디바이스 계층
 - 노드 detail은 관심 키 화이트리스트(vendor_id, serial, speed, bus_power, route_string 등)를 `·`로 이어붙임
 - `DeviceListView`는 `OutlineGroup`으로 트리 렌더 (children이 `Optional`이어야 함 — `nil`이 리프)
+
+현재 변경의 검증은 주입된 unmount/eject 결과로 실패 시 순서 중단을 검사한다. 실제 사용자 디스크를 테스트 목적으로 unmount/eject하지 않는다.

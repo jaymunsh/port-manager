@@ -7,12 +7,16 @@ final class DeviceStore: ObservableObject {
     @Published private(set) var volumes: [VolumeInfo] = []
     @Published private(set) var isLoadingDevices = false
     @Published private(set) var lastUpdated: Date?
+    @Published private(set) var lastError: String?
 
     /// Wired by MonitorEngine to log/notify on disk events.
     var onDiskEvent: ((DiskEvent) -> Void)?
 
     private let disks = DiskService()
     private var started = false
+    private let refreshGate = RefreshGate()
+    private var startupTask: Task<Void, Never>?
+    private var baselineTask: Task<Void, Never>?
     /// DA fires "appeared" for every disk already attached when the session
     /// starts — suppress event reporting until that initial flood has passed.
     private var suppressingBaseline = true
@@ -24,27 +28,49 @@ final class DeviceStore: ObservableObject {
             Task { @MainActor in self?.handle(event) }
         }
         disks.start()
-        Task { await refresh() }
-        Task {
+        startupTask = Task { await refresh() }
+        baselineTask = Task {
             try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
             suppressingBaseline = false
         }
     }
 
     func refresh() async {
+        await refreshGate.run { [weak self] in await self?.refreshOnce() }
+    }
+
+    func stop() {
+        startupTask?.cancel()
+        baselineTask?.cancel()
+        refreshGate.cancel()
+        disks.stop()
+        started = false
+        suppressingBaseline = true
+    }
+
+    private func refreshOnce() async {
         isLoadingDevices = true
         defer { isLoadingDevices = false }
-        async let usb = Task.detached { try? USBProvider().usbTree() }.value
-        async let tb = Task.detached { try? USBProvider().thunderboltTree() }.value
-        usbNodes = await usb ?? []
-        thunderboltNodes = await tb ?? []
-        volumes = disks.externalVolumes()
-        lastUpdated = .now
+        do {
+            async let usb = Background.run { try USBProvider().usbTree() }
+            async let tb = Background.run { try USBProvider().thunderboltTree() }
+            let (usbResult, tbResult) = try await (usb, tb)
+            guard !Task.isCancelled else { return }
+            usbNodes = usbResult
+            thunderboltNodes = tbResult
+            volumes = disks.externalVolumes()
+            lastUpdated = .now
+            lastError = nil
+        } catch {
+            guard !Task.isCancelled else { return }
+            lastError = error.localizedDescription
+        }
     }
 
     func unmount(_ volume: VolumeInfo, force: Bool) async -> Result<Void, DiskServiceError> {
         await withCheckedContinuation { cont in
-            disks.unmount(bsdName: volume.bsdName, force: force) { result in
+            disks.unmount(bsdName: volume.bsdName, force: force, wholeDevice: true) { result in
                 cont.resume(returning: result)
             }
         }
@@ -58,20 +84,44 @@ final class DeviceStore: ObservableObject {
         }
     }
 
-    func blockingProcesses(for volume: VolumeInfo) -> [(pid: pid_t, command: String)] {
-        guard let mount = volume.mountPoint else { return [] }
-        return (try? LsofProvider().processesUsing(path: mount)) ?? []
+    func safelyEject(_ volume: VolumeInfo, force: Bool) async -> Result<Void, DiskServiceError> {
+        await EjectOperation.perform(unmount: { await self.unmount(volume, force: force) },
+                                     eject: { await self.eject(volume) })
+    }
+
+    func mountPointsOnDevice(for volume: VolumeInfo) -> [String] {
+        let whole = disks.wholeDiskName(for: volume.bsdName)
+        let siblings = whole == nil ? [] : volumes.filter { disks.wholeDiskName(for: $0.bsdName) == whole }
+        return Array(Set(([volume] + siblings).compactMap(\.mountPoint))).sorted()
+    }
+
+    func blockingProcesses(at mountPoints: [String]) async throws -> [(pid: pid_t, command: String)] {
+        try await Background.run {
+            var processes: [pid_t: String] = [:]
+            for mount in mountPoints {
+                // A successful partial unmount may already have removed this path.
+                guard FileManager.default.fileExists(atPath: mount) else { continue }
+                for process in try LsofProvider().processesUsing(path: mount) {
+                    processes[process.pid] = process.command
+                }
+            }
+            return processes.map { (pid: $0.key, command: $0.value) }.sorted { $0.pid < $1.pid }
+        }
     }
 
     private func handle(_ event: DiskEvent) {
+        guard started else { return }
         switch event {
         case .appeared(let info):
-            if !volumes.contains(info) {
+            if let index = volumes.firstIndex(where: { $0.bsdName == info.bsdName }) {
+                volumes[index] = info
+            } else {
                 volumes.append(info)
                 volumes.sort { $0.volumeName < $1.volumeName }
             }
             if !suppressingBaseline { onDiskEvent?(event) }
         case .disappeared(let bsd):
+            guard volumes.contains(where: { $0.bsdName == bsd }) else { return }
             volumes.removeAll { $0.bsdName == bsd }
             onDiskEvent?(event)
         case .changed(let info):

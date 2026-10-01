@@ -6,6 +6,7 @@ struct SettingsView: View {
     @EnvironmentObject var monitor: MonitorEngine
     @EnvironmentObject var activity: ActivityStore
     @AppStorage("menubar.enabled") private var menuBarEnabled = true
+    @State private var settingsError: String?
 
     private var launchAtLogin: Binding<Bool> {
         Binding(
@@ -18,7 +19,7 @@ struct SettingsView: View {
                         try SMAppService.mainApp.unregister()
                     }
                 } catch {
-                    // Registration can fail for unsigned dev builds; ignore.
+                    settingsError = error.localizedDescription
                 }
             })
     }
@@ -46,11 +47,11 @@ struct SettingsView: View {
             Section("Polling") {
                 LabeledContent("Refresh interval") {
                     HStack {
-                        Slider(value: refreshInterval, in: 1...10, step: 1)
+                        Slider(value: refreshInterval, in: 0...10, step: 1)
                             .frame(width: 160)
-                        Text(verbatim: "\(Int(ports.refreshInterval))s")
+                        Text(verbatim: ports.refreshInterval == 0 ? "Paused" : "\(Int(ports.refreshInterval))s")
                             .monospacedDigit()
-                            .frame(width: 28, alignment: .trailing)
+                            .frame(width: 52, alignment: .trailing)
                     }
                 }
                 Toggle("Include UDP sockets", isOn: includeUDP)
@@ -84,5 +85,9 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(maxWidth: 560, maxHeight: .infinity, alignment: .top)
         .padding()
+        .alert("Login item could not be updated", isPresented: Binding(
+            get: { settingsError != nil }, set: { if !$0 { settingsError = nil } })) {
+            Button("OK") { settingsError = nil }
+        } message: { Text(settingsError ?? "") }
     }
 }

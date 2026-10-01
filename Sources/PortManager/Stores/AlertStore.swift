@@ -4,16 +4,21 @@ import Foundation
 final class AlertStore: ObservableObject {
     @Published private(set) var alerts: [BandwidthAlert] = []
 
-    private let fileURL: URL = {
+    private let fileURL: URL
+    private var changeHandlers: [() -> Void] = []
+    private static let defaultFileURL: URL = {
         let dir = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("PortManager", isDirectory: true)
         return dir.appendingPathComponent("alerts.json")
     }()
 
-    init() {
+    init(fileURL: URL? = nil) {
+        self.fileURL = fileURL ?? Self.defaultFileURL
         load()
     }
+
+    func onChange(_ handler: @escaping () -> Void) { changeHandlers.append(handler) }
 
     /// Current in+out bytes/sec matching a rule.
     func currentRate(for alert: BandwidthAlert,
@@ -22,11 +27,14 @@ final class AlertStore: ObservableObject {
                      connRates: [NettopProvider.ConnKey: NetRate]) -> Double {
         if let port = alert.port {
             let matching = entries.filter { $0.port == port }
-            let connSum = matching.reduce(0.0) { $0 + (connRates[$1.connKey]?.total ?? 0) }
-            if connSum > 0 { return connSum }
+            let pids = Set(matching.map(\.pid))
+            // Accepted connections are present in nettop even when the UI
+            // hides connected sockets. A measured zero is still valid data.
+            let socketRates = connRates.filter { $0.key.localPort == port && pids.contains($0.key.pid) }.values
+            if !socketRates.isEmpty { return socketRates.reduce(0) { $0 + $1.total } }
             // No per-socket data — fall back to the owning process total.
-            return matching.filter(\.isListener)
-                .reduce(0.0) { $0 + (netRates[$1.pid]?.total ?? 0) }
+            return Set(matching.filter(\.isListener).map(\.pid))
+                .reduce(0.0) { $0 + (netRates[$1]?.total ?? 0) }
         }
         if let command = alert.command {
             let pids = Set(entries.filter {
@@ -40,17 +48,20 @@ final class AlertStore: ObservableObject {
     func add(_ alert: BandwidthAlert) {
         alerts.append(alert)
         save()
+        for handler in changeHandlers { handler() }
     }
 
     func update(_ alert: BandwidthAlert) {
         guard let idx = alerts.firstIndex(where: { $0.id == alert.id }) else { return }
         alerts[idx] = alert
         save()
+        for handler in changeHandlers { handler() }
     }
 
     func remove(_ alert: BandwidthAlert) {
         alerts.removeAll { $0.id == alert.id }
         save()
+        for handler in changeHandlers { handler() }
     }
 
     private func load() {

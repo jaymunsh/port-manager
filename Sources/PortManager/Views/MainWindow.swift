@@ -49,5 +49,6 @@ struct MainWindow: View {
             }
         }
         .onAppear { state.start() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in state.stop() }
     }
 }

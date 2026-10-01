@@ -11,6 +11,7 @@ struct KillSheet: View {
     @State private var phase: Phase = .confirm
     @State private var info: ProcessInfo?
     @State private var errorMessage: String?
+    @State private var identity: ProcessIdentity?
 
     private let service = ProcessService()
 
@@ -28,8 +29,21 @@ struct KillSheet: View {
         }
         .padding(20)
         .frame(width: 460)
+        .interactiveDismissDisabled(phase == .working)
         .task {
-            info = await Task.detached { ProcessService().info(for: entry.pid) }.value
+            guard let selected = entry.processIdentity else {
+                errorMessage = KillError.identityUnavailable.description
+                phase = .failed
+                return
+            }
+            info = try? await Background.run { ProcessService().info(for: entry.pid) }
+            guard !Task.isCancelled else { return }
+            guard ProcessService.identityMatches(expected: selected, current: service.identity(for: entry.pid)) else {
+                errorMessage = KillError.identityChanged.description
+                phase = .failed
+                return
+            }
+            identity = selected
         }
     }
 
@@ -120,7 +134,7 @@ struct KillSheet: View {
                     Task { await terminate(force: false) }
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(service.isProtected(pid: entry.pid, command: entry.command))
+                .disabled(identity == nil || service.isProtected(pid: entry.pid, command: entry.command))
             case .working:
                 ProgressView().controlSize(.small)
             case .needsForce:
@@ -142,15 +156,21 @@ struct KillSheet: View {
     }
 
     private func terminate(force: Bool) async {
+        guard phase != .working else { return }
+        guard let identity else {
+            errorMessage = KillError.identityUnavailable.description
+            phase = .failed
+            return
+        }
         phase = .working
-        if let error = service.sendSignal(force ? SIGKILL : SIGTERM, to: entry.pid) {
+        if let error = service.sendSignal(force ? SIGKILL : SIGTERM, to: identity) {
             switch error {
             case .notPermitted:
                 errorMessage = error.description
                 phase = .blocked
             case .noSuchProcess:
                 phase = .done
-            case .failed:
+            case .failed, .protectedProcess, .identityChanged, .identityUnavailable:
                 errorMessage = error.description
                 phase = .failed
             }
@@ -159,7 +179,7 @@ struct KillSheet: View {
         // Poll until the process exits (up to ~5s).
         for _ in 0..<10 {
             try? await Task.sleep(for: .milliseconds(500))
-            if !service.isAlive(entry.pid) {
+            if !service.isAlive(identity) {
                 phase = .done
                 activity.log(.process, "Terminated \(entry.command) (pid \(entry.pid))")
                 await ports.refresh()

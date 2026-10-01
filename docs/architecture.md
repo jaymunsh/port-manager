@@ -22,7 +22,7 @@
 ```
 
 규칙:
-- Service는 모두 `Sendable` struct — 외부 프로세스 실행/파싱만 하고 상태를 안 들고 있음. Store의 `Task.detached`에서 호출된다.
+- Service는 모두 `Sendable` struct — 외부 프로세스 실행/파싱만 하고 상태를 안 들고 있음. `Background.run`에서 호출된다. DiskService는 메인 run loop에 연결되는 클래스 예외다.
 - Store는 `@MainActor` — `@Published` 상태와 폴링 루프를 소유. 무거운 수집은 detached로 보내고 결과만 메인에 반영.
 - View는 필요한 Store를 **개별** `@EnvironmentObject`로 주입받는다 (아래 함정 참고).
 
@@ -55,9 +55,10 @@ PortManagerApp
 
 ```
 PortStore.pollTask      ──(interval, 기본 3s)──▶ lsof + ps
-PortStore.netTask       ──(연속)──▶ nettop     ← 호출당 ~5초 걸려서 분리됨
+PortStore.netTask       ──(필요할 때, ≥5s)──▶ nettop     ← 호출당 ~5초 걸려서 분리됨
 PortStore.dockerTask    ──(15s)──▶ docker ps   ← 없는 환경도 고려해 분리
-NetworkStore.pollTask   ──(2s)──▶ netstat/ifconfig/scutil/CoreWLAN
+NetworkStore.pollTask   ──(2s)──▶ netstat/ifconfig/CoreWLAN
+NetworkStore metadata   ──(30s 캐시/주소 변경/수동 갱신)──▶ gateway/DNS
 DeviceStore             ── DiskArbitration 콜백(이벤트 드리븐) + 수동 refresh
 ```
 
@@ -72,7 +73,9 @@ PortStore.refresh()
             └─ MonitorEngine
                  ├─ ActivityStore.log(.listener, ...)
                  ├─ NotifyService.post (설정 토글 시)
-                 └─ 프리셋 상태 전환 평가 (conflict 발생 시 알림)
+
+PortStore.onSnapshot (첫 스냅샷 포함) / PresetStore.onChange
+  └─ MonitorEngine → 프리셋 상태 전환 평가 (conflict 발생 시 알림)
 
 DiskService 콜백 (DA appeared/changed/disappeared)
   └─ DeviceStore.handle — mount↔unmount 전환을 .appeared/.unmounted로 재해석
@@ -108,6 +111,10 @@ Sources/PortManager/
 ## 동시성 규칙
 
 - Swift 6 strict concurrency. 모든 Store는 `@MainActor`, Service는 `Sendable`.
-- 무거운 호출은 `Task.detached(priority: .utility)` → 완료 후 메인에서 `@Published` 대입.
+- 무거운 호출은 `Background.run`의 detached task → 완료 후 메인에서 `@Published` 대입. 부모 취소가 수집기와 실행 중인 명령에 전파된다.
+- `RefreshGate`는 Port/Network/Device의 수집을 직렬화하고 겹치는 요청은 최신 요청 하나로 합친다. 옵션이 변경된 동안 수집한 포트 결과는 버린다.
+- rate는 monotonic uptime으로 계산하며, 사라진 PID/연결/인터페이스 카운터는 즉시 제거한다.
+- 포트 폴링 간격 0은 일시정지다. 수동 새로고침은 가능하다.
+- nettop은 Ports 화면이 보이거나 활성 대역폭 알림 규칙이 있을 때만 실행한다. 화면별 UUID로 여러 창의 수명을 구분한다.
 - DiskArbitration 콜백은 DA 전용 큐에서 오므로 `Task { @MainActor in ... }`로 hop.
 - 숫자 표시는 `Text(verbatim:)` 또는 미리 포맷한 `String` — `Text` 보간은 로케일 그룹핑(`91,595`)을 넣는다.

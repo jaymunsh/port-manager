@@ -4,13 +4,21 @@ import Foundation
 /// `~/Library/Application Support/PortManager/history/`.
 /// Size stays tiny: one event is ~100 bytes.
 struct HistoryService: Sendable {
-    let directory: URL = {
+    let directory: URL
+
+    init(directory: URL? = nil) {
+        self.directory = directory ?? Self.defaultDirectory
+    }
+
+    private static let defaultDirectory: URL = {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("PortManager/history", isDirectory: true)
     }()
 
     private static let dayFormatter: DateFormatter = {
         let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.calendar = Calendar(identifier: .gregorian)
         f.dateFormat = "yyyy-MM-dd"
         return f
     }()
@@ -42,7 +50,8 @@ struct HistoryService: Sendable {
     }
 
     /// Loads events from the most recent `days` files (newest first).
-    func loadRecent(days: Int) -> [ActivityEvent] {
+    func loadRecent(days: Int, limit: Int = 500) -> [ActivityEvent] {
+        guard days > 0, limit > 0 else { return [] }
         var events: [ActivityEvent] = []
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -50,14 +59,24 @@ struct HistoryService: Sendable {
             guard let date = Calendar.current.date(byAdding: .day, value: -offset, to: .now) else { continue }
             let url = fileURL(for: date)
             guard let data = try? Data(contentsOf: url) else { continue }
+            var dayEvents: [ActivityEvent] = []
             for line in data.split(separator: 0x0A) {
                 if let event = try? decoder.decode(ActivityEvent.self, from: line) {
-                    events.append(event)
+                    dayEvents.append(event)
                 }
             }
-            if !events.isEmpty { break } // stop at the newest non-empty day
+            events.append(contentsOf: dayEvents.sorted { $0.date > $1.date }.prefix(limit - events.count))
+            if events.count >= limit { break }
         }
         return events.sorted { $0.date > $1.date }
+    }
+
+    func clear() {
+        guard let files = try? FileManager.default.contentsOfDirectory(at: directory,
+                                                                     includingPropertiesForKeys: nil) else { return }
+        for url in files where url.lastPathComponent.hasPrefix("history-") && url.pathExtension == "jsonl" {
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 
     /// Deletes history files older than `days`.

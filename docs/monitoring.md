@@ -17,7 +17,7 @@ conflict  — 리스너 있는데 command가 expectedCommand와 불일치
 - `expectedCommand` 매칭은 대소문자 무시 **부분 포함** — `docker`면 `com.docker.backend`도 매칭
 - `expectedCommand`를 비우면 "점유 여부"만 감시
 
-`MonitorEngine.evaluatePresets`는 매 폴링마다 상태 전환을 추적한다 (`presetStatuses` 맵에 이전 상태 저장 — 상태가 바뀐 순간만 이벤트):
+`MonitorEngine.evaluatePresets`는 첫 성공 스냅샷, 이후 성공 스냅샷과 프리셋 CRUD마다 상태 전환을 추적한다 (`presetStatuses` 맵에 이전 상태 저장 — 상태가 바뀐 순간만 이벤트):
 
 | 전환 | 이벤트 |
 |------|--------|
@@ -35,7 +35,7 @@ conflict  — 리스너 있는데 command가 expectedCommand와 불일치
 - `notifyDiskEvents` — 마운트/제거
 - `notifyBandwidth` — 대역폭 임계치 초과
 
-**baseline 규칙**: 앱 시작 시 첫 스냅샷/디스크 flood는 "새 이벤트"가 아니라 기준선 — 알림/로그를 안 쏜다.
+**baseline 규칙**: 앱 시작 시 기존 리스너/디스크 flood는 새 등장 알림을 만들지 않는다. 이미 존재하는 프리셋 충돌은 첫 스냅샷에서도 검사한다.
 
 ## 대역폭 알림 (BandwidthAlert)
 
@@ -43,14 +43,14 @@ conflict  — 리스너 있는데 command가 expectedCommand와 불일치
 
 - Ports 테이블 우클릭 "Bandwidth Alert…"로 생성, Presets 탭의 "Bandwidth Alerts" 섹션에서 목록/편집/비활성화
 - 평가: `PortStore`의 nettop 루프(~5초)가 끝날 때마다 `onRates` 핸들러 → `MonitorEngine.evaluateBandwidthAlerts`
-- rate 계산: 포트 규칙은 해당 포트 소켓들의 connRates 합, 없으면 리스너 pid의 프로세스 합계. 프로세스 규칙은 매칭 pid들의 netRates 합
+- rate 계산: 포트 규칙은 해당 포트 소켓들의 connRates 합, 없으면 리스너 PID의 프로세스 합계를 중복 없이 계산한다. 측정된 소켓 rate가 0이면 프로세스 합계로 대체하지 않는다. 연결 표시 토글과 관계없이 nettop의 해당 포트 연결을 합산한다. 프로세스 규칙은 매칭 pid들의 netRates 합
 - **전환 알림**: `alertOver` 맵으로 이전 상태를 기억 — 정상→초과 순간만 로그+알림 (계속 초과 상태면 조용)
 
 ## Activity 로그 + 히스토리
 
 `ActivityStore` — 최대 500개 링버퍼, 최신이 위. 종류: `listener`, `preset`, `disk`, `device`, `process`(안전 종료), `bandwidth`.
 
-`HistoryService`가 각 이벤트를 JSONL로 `~/Library/Application Support/PortManager/history/history-YYYY-MM-DD.jsonl`에 append — 껐다 켜도 로그가 남는다. 보관일은 Settings의 "Keep activity for"(기본 7일, `history.retentionDays`), 시작 시 오래된 파일 prune + 최근 파일을 메모리로 로드.
+`HistoryService`가 각 이벤트를 JSONL로 `~/Library/Application Support/PortManager/history/history-YYYY-MM-DD.jsonl`에 append — 껐다 켜도 로그가 남는다. 보관일은 Settings의 "Keep activity for"(기본 7일, `history.retentionDays`), 시작 시 오래된 파일 prune + 보존 기간 전체에서 최신 500개를 메모리로 로드한다. Clear는 저장된 히스토리도 삭제하여 재시작 후 되살아나지 않는다.
 
 "변화"만 기록 — 정적 상태는 안 올라온다.
 
@@ -61,7 +61,7 @@ conflict  — 리스너 있는데 command가 expectedCommand와 불일치
   - 헤더: 리스너/충돌/디스크 수
   - Presets: 상태 점 + 이름 + 포트, conflict 시 Kill 버튼
   - Listeners: CPU 상위 10개 컴팩트 행 + "… N more"
-  - External Disks: 볼륨 + eject 버튼
+  - External Disks: 볼륨 + eject 버튼 → 메인 창과 같은 EjectSheet(확인/오류/재시도/강제 옵션)
   - 푸터: Open(메인창) / Settings(메인창 Settings 탭으로 딥링크) / Quit
 
 딥링크는 `AppState.section`(@Published)을 바꾸고 `openWindow(id: "main")` — `openSettings()`는 MenuBarExtra에서 앱 비활성 시 묵묵히 실패하는 함정이 있어 쓰지 않는다.

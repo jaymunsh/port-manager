@@ -7,6 +7,7 @@ struct MenuBarPopover: View {
     @EnvironmentObject var devices: DeviceStore
     @Environment(\.openWindow) private var openWindow
     @State private var killTarget: PortEntry?
+    @State private var ejectTarget: VolumeInfo?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -28,6 +29,9 @@ struct MenuBarPopover: View {
         .onAppear { state.start() }
         .sheet(item: $killTarget) { entry in
             KillSheet(entry: entry)
+        }
+        .sheet(item: $ejectTarget) { volume in
+            EjectSheet(volume: volume)
         }
     }
 
@@ -121,7 +125,12 @@ struct MenuBarPopover: View {
                 Image(systemName: "externaldrive.fill").foregroundStyle(.secondary)
                 Text(volume.volumeName).lineLimit(1)
                 Spacer()
-                MenuBarEjectButton(volume: volume)
+                Button { ejectTarget = volume } label: {
+                    Image(systemName: "eject.fill")
+                }
+                .buttonStyle(.borderless)
+                .help("Safely eject \(volume.volumeName)")
+                .accessibilityLabel("Safely eject \(volume.volumeName)")
             }
             .font(.callout)
         }
@@ -173,31 +182,5 @@ struct MenuBarPopover: View {
         case .expected: .blue
         case .conflict: .red
         }
-    }
-}
-
-private struct MenuBarEjectButton: View {
-    let volume: VolumeInfo
-    @EnvironmentObject var devices: DeviceStore
-    @State private var working = false
-
-    var body: some View {
-        Button {
-            working = true
-            Task {
-                _ = await devices.unmount(volume, force: false)
-                _ = await devices.eject(volume)
-                working = false
-            }
-        } label: {
-            if working {
-                ProgressView().controlSize(.mini)
-            } else {
-                Image(systemName: "eject.fill")
-            }
-        }
-        .buttonStyle(.borderless)
-        .disabled(working)
-        .help("Eject \(volume.volumeName)")
     }
 }

@@ -1,173 +1,219 @@
 import Foundation
 
+struct PortSnapshot: Sendable {
+    var entries: [PortEntry]
+    var stats: [pid_t: ProcStat]
+}
+
 @MainActor
 final class PortStore: ObservableObject {
     @Published private(set) var entries: [PortEntry] = []
     @Published private(set) var stats: [pid_t: ProcStat] = [:]
-    /// Per-process totals (nettop header rows).
     @Published private(set) var netRates: [pid_t: NetRate] = [:]
-    /// Per-socket rates keyed by pid+local port+remote port.
     @Published private(set) var connRates: [NettopProvider.ConnKey: NetRate] = [:]
-    /// Running Docker containers, keyed lookup by published host port.
     @Published private(set) var dockerByPort: [Int: DockerContainer] = [:]
     @Published private(set) var dockerContainers: [DockerContainer] = []
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var lastError: String?
-    @Published var includeUDP = UserDefaults.standard.bool(forKey: "ports.includeUDP") {
+    @Published private(set) var bandwidthError: String?
+    @Published var includeUDP = false {
         didSet {
-            UserDefaults.standard.set(includeUDP, forKey: "ports.includeUDP")
+            guard initialized else { return }
+            defaults.set(includeUDP, forKey: "ports.includeUDP")
             Task { await refresh() }
         }
     }
-    @Published var showConnections = UserDefaults.standard.bool(forKey: "ports.showConnections") {
+    @Published var showConnections = false {
         didSet {
-            UserDefaults.standard.set(showConnections, forKey: "ports.showConnections")
+            guard initialized else { return }
+            defaults.set(showConnections, forKey: "ports.showConnections")
             Task { await refresh() }
         }
     }
-    /// Seconds between automatic snapshots. 0 disables polling.
-    @Published var refreshInterval: TimeInterval = {
-        let v = UserDefaults.standard.double(forKey: "ports.refreshInterval")
-        return v > 0 ? v : 3
-    }() {
-        didSet { UserDefaults.standard.set(refreshInterval, forKey: "ports.refreshInterval") }
+    /// 0 pauses port polling; manual refresh remains available.
+    @Published var refreshInterval: TimeInterval = 3 {
+        didSet {
+            guard initialized else { return }
+            defaults.set(refreshInterval, forKey: "ports.refreshInterval")
+            if polling { startPortPolling() }
+        }
     }
 
+    var bandwidthMonitoringEnabled = false { didSet { updateBandwidthPolling() } }
+    private var consumers: Set<UUID> = []
+    private var polling = false
     private var pollTask: Task<Void, Never>?
     private var netTask: Task<Void, Never>?
     private var dockerTask: Task<Void, Never>?
+    private let refreshGate = RefreshGate()
     private var diffHandlers: [([PortEntry], [PortEntry]) -> Void] = []
+    private var snapshotHandlers: [() -> Void] = []
     private var rateHandlers: [() -> Void] = []
-    private var prevNet: [pid_t: (in: Int64, out: Int64, at: Date)] = [:]
-    private var prevConn: [NettopProvider.ConnKey: (in: Int64, out: Int64, at: Date)] = [:]
+    private var pidTracker = RateTracker<pid_t>()
+    private var connTracker = RateTracker<NettopProvider.ConnKey>()
+    private let collector: @Sendable (Bool, Bool) throws -> PortSnapshot
+    private let bandwidthCollector: @Sendable () throws -> NettopProvider.Result
+    private let dockerCollector: @Sendable () -> DockerProvider.Snapshot
+    private let defaults: UserDefaults
+    private var initialized = false
 
-    func onDiff(_ handler: @escaping ([PortEntry], [PortEntry]) -> Void) {
-        diffHandlers.append(handler)
+    init(defaults: UserDefaults = .standard,
+         collector: @escaping @Sendable (Bool, Bool) throws -> PortSnapshot = PortStore.collect,
+         bandwidthCollector: @escaping @Sendable () throws -> NettopProvider.Result = { try NettopProvider().snapshot() },
+         dockerCollector: @escaping @Sendable () -> DockerProvider.Snapshot = { DockerProvider().snapshot() }) {
+        self.collector = collector
+        self.bandwidthCollector = bandwidthCollector
+        self.dockerCollector = dockerCollector
+        self.defaults = defaults
+        includeUDP = defaults.bool(forKey: "ports.includeUDP")
+        showConnections = defaults.bool(forKey: "ports.showConnections")
+        if let interval = defaults.object(forKey: "ports.refreshInterval") as? Double {
+            refreshInterval = interval.isFinite ? max(0, interval) : 3
+        }
+        initialized = true
     }
 
-    /// Called after each nettop-derived rate update (~every 5s).
-    func onRates(_ handler: @escaping () -> Void) {
-        rateHandlers.append(handler)
+    nonisolated private static func collect(udp: Bool, connections: Bool) throws -> PortSnapshot {
+        let service = ProcessService()
+        var snapshot = try LsofProvider().snapshot(includeUDP: udp, includeConnections: connections)
+        let identities = Dictionary(uniqueKeysWithValues: Set(snapshot.map(\.pid)).map {
+            ($0, service.identity(for: $0))
+        })
+        for index in snapshot.indices { snapshot[index].processIdentity = identities[snapshot[index].pid] ?? nil }
+        return PortSnapshot(entries: snapshot, stats: service.allStats())
+    }
+
+    func onDiff(_ handler: @escaping ([PortEntry], [PortEntry]) -> Void) { diffHandlers.append(handler) }
+    func onSnapshot(_ handler: @escaping () -> Void) { snapshotHandlers.append(handler) }
+    func onRates(_ handler: @escaping () -> Void) { rateHandlers.append(handler) }
+
+    func setBandwidthConsumer(_ id: UUID, active: Bool) {
+        if active { consumers.insert(id) } else { consumers.remove(id) }
+        updateBandwidthPolling()
     }
 
     func startPolling() {
-        guard pollTask == nil else { return }
-        pollTask = Task { [weak self] in
-            while !Task.isCancelled {
-                guard let self else { return }
-                await self.refresh()
-                let interval = self.refreshInterval
-                guard interval > 0 else { continue }
-                try? await Task.sleep(for: .seconds(interval))
-            }
-        }
-        // nettop takes ~5s per snapshot — keep it off the port-refresh
-        // path so the table stays responsive.
-        netTask = Task { [weak self] in
-            while !Task.isCancelled {
-                guard let self else { return }
-                let net = await Task.detached(priority: .utility) {
-                    NettopProvider().snapshot()
-                }.value
-                guard !Task.isCancelled else { return }
-                self.netRates = Self.rates(from: net.perPid, previous: &self.prevNet)
-                self.connRates = Self.rates(from: net.perConn, previous: &self.prevConn)
-                for handler in self.rateHandlers { handler() }
-            }
-        }
-        // Docker is optional — when the CLI/daemon is absent, back off to a
-        // slow retry instead of spawning a failing process every 15s.
+        guard !polling else { return }
+        polling = true
+        startPortPolling()
+        updateBandwidthPolling()
         dockerTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                let snap = await Task.detached(priority: .utility) {
-                    DockerProvider().snapshot()
-                }.value
-                guard !Task.isCancelled else { return }
-                self.dockerContainers = snap.containers
-                self.dockerByPort = snap.byPort
-                try? await Task.sleep(for: .seconds(snap.available ? 15 : 60))
+                let collect = self.dockerCollector
+                guard let snapshot = try? await Background.run(collect), !Task.isCancelled else { return }
+                self.dockerContainers = snapshot.containers
+                self.dockerByPort = snapshot.byPort
+                try? await Task.sleep(for: .seconds(snapshot.available ? 15 : 60))
+            }
+        }
+    }
+
+    private func startPortPolling() {
+        pollTask?.cancel()
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let interval = self.refreshInterval
+                if interval > 0 && interval.isFinite { await self.refresh() }
+                try? await Task.sleep(for: .seconds(interval > 0 && interval.isFinite ? interval : 1))
+            }
+        }
+    }
+
+    private func updateBandwidthPolling() {
+        guard polling && (bandwidthMonitoringEnabled || !consumers.isEmpty) else {
+            netTask?.cancel()
+            netTask = nil
+            pidTracker.reset()
+            connTracker.reset()
+            if !netRates.isEmpty || !connRates.isEmpty {
+                netRates = [:]
+                connRates = [:]
+                for handler in rateHandlers { handler() }
+            }
+            bandwidthError = nil
+            return
+        }
+        guard netTask == nil else { return }
+        netTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let started = Foundation.ProcessInfo.processInfo.systemUptime
+                let collect = self.bandwidthCollector
+                do {
+                    let snapshot = try await Background.run(collect)
+                    guard !Task.isCancelled else { return }
+                    self.bandwidthError = nil
+                    self.netRates = self.pidTracker.update(snapshot.perPid)
+                    self.connRates = self.connTracker.update(snapshot.perConn)
+                    for handler in self.rateHandlers { handler() }
+                    let remaining = max(0, 5 - (Foundation.ProcessInfo.processInfo.systemUptime - started))
+                    if remaining > 0 { try await Task.sleep(for: .seconds(remaining)) }
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    self.bandwidthError = error.localizedDescription
+                    self.pidTracker.reset()
+                    self.connTracker.reset()
+                    self.netRates = [:]
+                    self.connRates = [:]
+                    // A failing collector must not turn into a hot spawn loop.
+                    try? await Task.sleep(for: .seconds(10))
+                }
             }
         }
     }
 
     func stopPolling() {
+        polling = false
         pollTask?.cancel()
         pollTask = nil
-        netTask?.cancel()
-        netTask = nil
         dockerTask?.cancel()
         dockerTask = nil
+        refreshGate.cancel()
+        updateBandwidthPolling()
     }
 
-    /// Entries rolled up per process for the grouped view.
     static func groups(from entries: [PortEntry]) -> [ProcessGroup] {
-        Dictionary(grouping: entries, by: \.pid)
-            .map { pid, sockets in
-                ProcessGroup(
-                    pid: pid,
-                    command: sockets.first?.command ?? "?",
-                    user: sockets.first?.user ?? "",
-                    sockets: sockets.sorted { $0.port < $1.port })
-            }
-            .sorted { ($0.primaryPort, $0.command) < ($1.primaryPort, $1.command) }
+        Dictionary(grouping: entries, by: \.pid).map { pid, sockets in
+            ProcessGroup(pid: pid, command: sockets.first?.command ?? "?", user: sockets.first?.user ?? "",
+                         sockets: sockets.sorted { $0.port < $1.port })
+        }.sorted { ($0.primaryPort, $0.command) < ($1.primaryPort, $1.command) }
     }
 
-    /// Docker container publishing this host port, if any.
-    func container(forPort port: Int) -> DockerContainer? {
-        dockerByPort[port]
-    }
+    func container(forPort port: Int) -> DockerContainer? { dockerByPort[port] }
 
     func refresh() async {
-        let udp = includeUDP
-        let conn = showConnections
-        let result = await Task.detached(priority: .utility) {
-            (try? LsofProvider().snapshot(includeUDP: udp, includeConnections: conn),
-             ProcessService().allStats())
-        }.value
-        let (snapshot, newStats) = result
-        guard let snapshot else {
-            lastError = "lsof 실행에 실패했습니다"
-            return
-        }
-        lastError = nil
-        stats = newStats
-        let isBaseline = lastUpdated == nil
-        // Only listeners drive diff notifications — outbound connections
-        // churn too fast to be meaningful events.
-        let old = Set(entries.filter(\.isListener))
-        let new = Set(snapshot.filter(\.isListener))
-        entries = snapshot.sorted { ($0.port, $0.command) < ($1.port, $1.command) }
-        lastUpdated = .now
-        // The first snapshot is a baseline — existing listeners aren't "new".
-        guard !isBaseline else { return }
-        let added = new.subtracting(old).sorted { $0.port < $1.port }
-        let removed = old.subtracting(new).sorted { $0.port < $1.port }
-        if !added.isEmpty || !removed.isEmpty {
-            for handler in diffHandlers { handler(added, removed) }
-        }
+        await refreshGate.run { [weak self] in await self?.refreshOnce() }
     }
 
-    /// Converts cumulative nettop counters into per-second rates.
-    private static func rates<K: Hashable>(
-        from snapshot: [K: NettopProvider.Snapshot],
-        previous: inout [K: (in: Int64, out: Int64, at: Date)]
-    ) -> [K: NetRate] {
-        let now = Date()
-        var out: [K: NetRate] = [:]
-        for (key, s) in snapshot {
-            if let p = previous[key] {
-                let dt = max(now.timeIntervalSince(p.at), 0.1)
-                out[key] = NetRate(
-                    inRate: max(0, Double(s.bytesIn - p.in) / dt),
-                    outRate: max(0, Double(s.bytesOut - p.out) / dt))
+    private func refreshOnce() async {
+        let udp = includeUDP, connections = showConnections
+        let collect = collector
+        do {
+            let snapshot = try await Background.run { try collect(udp, connections) }
+            guard !Task.isCancelled, udp == includeUDP, connections == showConnections else { return }
+            lastError = nil
+            stats = snapshot.stats
+            let baseline = lastUpdated == nil
+            let old = Set(entries.filter(\.isListener)), new = Set(snapshot.entries.filter(\.isListener))
+            entries = snapshot.entries.sorted { ($0.port, $0.command) < ($1.port, $1.command) }
+            lastUpdated = .now
+            if !baseline {
+                let added = new.subtracting(old).sorted { $0.port < $1.port }
+                let removed = old.subtracting(new).sorted { $0.port < $1.port }
+                if !added.isEmpty || !removed.isEmpty {
+                    for handler in diffHandlers { handler(added, removed) }
+                }
             }
-            previous[key] = (s.bytesIn, s.bytesOut, now)
+            // Includes the baseline, even when there are no listener changes.
+            for handler in snapshotHandlers { handler() }
+        } catch {
+            guard !Task.isCancelled, udp == includeUDP, connections == showConnections else { return }
+            lastError = error.localizedDescription
         }
-        return out
     }
 
-    /// Live entry matching a port+pid pair, if it still exists.
     func liveEntry(pid: pid_t, port: Int) -> PortEntry? {
         entries.first { $0.pid == pid && $0.port == port }
     }

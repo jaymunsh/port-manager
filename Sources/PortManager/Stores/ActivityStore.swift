@@ -15,10 +15,11 @@ final class ActivityStore: ObservableObject {
         }
     }
 
-    private let history = HistoryService()
+    private let history: HistoryService
     private let limit = 500
 
-    init() {
+    init(history: HistoryService = HistoryService()) {
+        self.history = history
         history.prune(olderThan: retentionDays)
         events = Array(history.loadRecent(days: retentionDays).prefix(limit))
     }
@@ -34,5 +35,6 @@ final class ActivityStore: ObservableObject {
 
     func clear() {
         events.removeAll()
+        history.clear()
     }
 }

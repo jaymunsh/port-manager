@@ -32,6 +32,12 @@ final class DiskService: @unchecked Sendable {
         DASessionScheduleWithRunLoop(session, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
     }
 
+    func stop() {
+        guard let session else { return }
+        DASessionUnscheduleFromRunLoop(session, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+        self.session = nil
+    }
+
     // MARK: - Enumeration
 
     /// Mounted volumes that live on external/removable media.
@@ -96,7 +102,7 @@ final class DiskService: @unchecked Sendable {
     // MARK: - Unmount / eject
 
     /// Unmounts a single volume. `force` detaches even when files are open.
-    func unmount(bsdName: String, force: Bool,
+    func unmount(bsdName: String, force: Bool, wholeDevice: Bool = false,
                  completion: @escaping @Sendable (Result<Void, DiskServiceError>) -> Void) {
         guard let session else {
             completion(.failure(.sessionUnavailable)); return
@@ -105,10 +111,17 @@ final class DiskService: @unchecked Sendable {
             completion(.failure(.cannotCreateDiskRef(bsdName))); return
         }
         let box = CallbackBox(completion)
-        let options: DADiskUnmountOptions = force
-            ? DADiskUnmountOptions(kDADiskUnmountOptionForce)
-            : DADiskUnmountOptions(kDADiskUnmountOptionDefault)
-        DADiskUnmount(disk, options, unmountCompletion, Unmanaged.passRetained(box).toOpaque())
+        var options = DADiskUnmountOptions(kDADiskUnmountOptionDefault)
+        if force { options |= DADiskUnmountOptions(kDADiskUnmountOptionForce) }
+        if wholeDevice { options |= DADiskUnmountOptions(kDADiskUnmountOptionWhole) }
+        let target = wholeDevice ? (DADiskCopyWholeDisk(disk) ?? disk) : disk
+        DADiskUnmount(target, options, unmountCompletion, Unmanaged.passRetained(box).toOpaque())
+    }
+
+    func wholeDiskName(for bsdName: String) -> String? {
+        guard let session, let disk = DADiskCreateFromBSDName(kCFAllocatorDefault, session, bsdName),
+              let whole = DADiskCopyWholeDisk(disk), let name = DADiskGetBSDName(whole) else { return nil }
+        return String(cString: name)
     }
 
     /// Ejects the whole physical device owning `bsdName` (all sibling volumes).

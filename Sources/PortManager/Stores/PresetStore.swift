@@ -4,20 +4,25 @@ import Foundation
 final class PresetStore: ObservableObject {
     @Published private(set) var presets: [PortPreset] = []
 
-    private let fileURL: URL = {
+    private let fileURL: URL
+    private var changeHandlers: [() -> Void] = []
+    private static let defaultFileURL: URL = {
         let dir = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("PortManager", isDirectory: true)
         return dir.appendingPathComponent("presets.json")
     }()
 
-    init() {
+    init(fileURL: URL? = nil) {
+        self.fileURL = fileURL ?? Self.defaultFileURL
         load()
     }
 
+    func onChange(_ handler: @escaping () -> Void) { changeHandlers.append(handler) }
+
     func status(for preset: PortPreset, entries: [PortEntry]) -> PresetStatus {
         let matching = entries.filter {
-            $0.port == preset.port && $0.proto.rawValue == preset.proto
+            $0.isListener && $0.port == preset.port && $0.proto.rawValue == preset.proto
         }
         guard !matching.isEmpty else { return .free }
         guard let expected = preset.expectedCommand, !expected.isEmpty else {
@@ -31,17 +36,20 @@ final class PresetStore: ObservableObject {
     func add(_ preset: PortPreset) {
         presets.append(preset)
         save()
+        for handler in changeHandlers { handler() }
     }
 
     func update(_ preset: PortPreset) {
         guard let idx = presets.firstIndex(where: { $0.id == preset.id }) else { return }
         presets[idx] = preset
         save()
+        for handler in changeHandlers { handler() }
     }
 
     func remove(_ preset: PortPreset) {
         presets.removeAll { $0.id == preset.id }
         save()
+        for handler in changeHandlers { handler() }
     }
 
     func preset(for entry: PortEntry) -> PortPreset? {

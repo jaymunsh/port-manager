@@ -17,7 +17,36 @@ struct ProcessService: Sendable {
     ]
 
     func isProtected(pid: pid_t, command: String) -> Bool {
-        Self.protectedPIDs.contains(pid) || Self.protectedNames.contains(command)
+        pid <= 1 || pid == getpid() || Self.protectedPIDs.contains(pid)
+            || Self.protectedNames.contains(URL(fileURLWithPath: command).lastPathComponent)
+    }
+
+    func identity(for pid: pid_t) -> ProcessIdentity? {
+        guard pid > 0 else { return nil }
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+        let commandCapacity = MemoryLayout.size(ofValue: info.pbi_comm)
+        let command = withUnsafePointer(to: &info.pbi_comm) {
+            $0.withMemoryRebound(to: CChar.self, capacity: commandCapacity) {
+                String(cString: $0)
+            }
+        }
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+        let path = length > 0
+            ? String(decoding: buffer.prefix(Int(length)).map { UInt8(bitPattern: $0) }, as: UTF8.self) : ""
+        return ProcessIdentity(pid: pid, startSeconds: info.pbi_start_tvsec,
+                               startMicroseconds: info.pbi_start_tvusec,
+                               command: command, executablePath: path)
+    }
+
+    static func identityMatches(expected: ProcessIdentity, current: ProcessIdentity?) -> Bool {
+        current == expected
+    }
+
+    func isAlive(_ identity: ProcessIdentity) -> Bool {
+        Self.identityMatches(expected: identity, current: self.identity(for: identity.pid))
     }
 
     func isAlive(_ pid: pid_t) -> Bool {
@@ -122,7 +151,16 @@ struct ProcessService: Sendable {
     }
 
     /// Sends a signal; returns nil on success.
-    func sendSignal(_ sig: Int32, to pid: pid_t) -> KillError? {
+    func sendSignal(_ sig: Int32, to expected: ProcessIdentity) -> KillError? {
+        let pid = expected.pid
+        if isProtected(pid: pid, command: expected.command) { return .protectedProcess }
+        guard let current = identity(for: pid) else {
+            return isAlive(pid) ? .identityUnavailable : .noSuchProcess
+        }
+        if isProtected(pid: pid, command: current.command)
+            || isProtected(pid: pid, command: current.executablePath) { return .protectedProcess }
+        guard Self.identityMatches(expected: expected, current: current) else { return .identityChanged }
+        guard sig == SIGTERM || sig == SIGKILL else { return .failed(EINVAL) }
         if kill(pid, sig) == 0 { return nil }
         switch errno {
         case EPERM: return .notPermitted

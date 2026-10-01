@@ -51,6 +51,7 @@ struct NetworkView: View {
             if let updated = network.lastUpdated {
                 Text("Updated \(updated, format: .dateTime.hour().minute().second())")
             }
+            if let error = network.lastError { Text(error).foregroundStyle(.red) }
         }
         .font(.caption)
         .foregroundStyle(.secondary)

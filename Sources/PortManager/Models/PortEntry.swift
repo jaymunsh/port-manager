@@ -17,6 +17,7 @@ struct PortEntry: Identifiable, Hashable, Sendable {
     let state: String
     /// "host:port" of the peer for outbound/connected sockets.
     let remote: String?
+    var processIdentity: ProcessIdentity? = nil
 
     var id: String { "\(pid):\(fd):\(proto.rawValue):\(address):\(port):\(remote ?? "")" }
     var endpoint: String { "\(address):\(port)" }
@@ -32,6 +33,8 @@ struct PortEntry: Identifiable, Hashable, Sendable {
 
     /// Key matching this socket against nettop per-connection counters.
     var connKey: NettopProvider.ConnKey {
-        NettopProvider.ConnKey(pid: pid, localPort: port, remotePort: remotePort)
+        let peer = remote.flatMap { LsofParser.splitEndpoint($0)?.address } ?? "*"
+        return NettopProvider.ConnKey(pid: pid, localPort: port, remotePort: remotePort,
+                                      localAddress: address, remoteAddress: peer, proto: proto.rawValue)
     }
 }

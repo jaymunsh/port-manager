@@ -17,6 +17,7 @@ struct PortListView: View {
     @AppStorage("ports.sortAsc") private var sortAsc = true
     @State private var sortOrder: [RowComparator] = [RowComparator(key: .port)]
     @State private var exportError: String?
+    @State private var bandwidthConsumer = UUID()
 
     private var filtered: [PortEntry] {
         ports.entries
@@ -128,7 +129,11 @@ struct PortListView: View {
                     description: Text("Select a port to see details"))
             }
         }
-        .onAppear { restoreSortOrder() }
+        .onAppear {
+            restoreSortOrder()
+            ports.setBandwidthConsumer(bandwidthConsumer, active: true)
+        }
+        .onDisappear { ports.setBandwidthConsumer(bandwidthConsumer, active: false) }
         .onChange(of: selection) { _, new in
             // Inspector follows selection: open on select, close on deselect.
             showInspector = new != nil
@@ -138,6 +143,7 @@ struct PortListView: View {
         // CPU/Net sorting reflects current values, not launch-time ones.
         .onChange(of: ports.stats) { _, _ in refreshComparatorData() }
         .onChange(of: ports.netRates) { _, _ in refreshComparatorData() }
+        .onChange(of: ports.connRates) { _, _ in refreshComparatorData() }
         .sheet(item: $killTarget) { entry in
             KillSheet(entry: entry)
         }
@@ -151,6 +157,10 @@ struct PortListView: View {
                 alerts.add(alert)
             }
         }
+        .alert("CSV export failed", isPresented: Binding(
+            get: { exportError != nil }, set: { if !$0 { exportError = nil } })) {
+            Button("OK") { exportError = nil }
+        } message: { Text(exportError ?? "") }
     }
 
     @ViewBuilder
@@ -312,6 +322,8 @@ struct PortListView: View {
                 Text("Updated \(updated, format: .dateTime.hour().minute().second())")
             }
             if let error = ports.lastError {
+                Text(error).foregroundStyle(.red)
+            } else if let error = ports.bandwidthError {
                 Text(error).foregroundStyle(.red)
             }
         }

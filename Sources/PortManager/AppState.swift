@@ -20,10 +20,16 @@ final class AppState: ObservableObject {
         guard !started else { return }
         started = true
 
+        monitor.start(ports: ports, devices: devices, presets: presets,
+                      activity: activity, alerts: alerts)
         ports.startPolling()
         devices.start()
         network.startPolling()
-        monitor.start(ports: ports, devices: devices, presets: presets,
-                      activity: activity, alerts: alerts)
+    }
+
+    func stop() {
+        ports.stopPolling()
+        devices.stop()
+        network.stopPolling()
     }
 }
